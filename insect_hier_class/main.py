@@ -7,21 +7,28 @@ import numpy as np
 import timm
 import torch
 import torch.optim as optim
-from torchvision import transforms, models
-from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
+from torchvision.models import (
+    mobilenet_v3_small, MobileNet_V3_Small_Weights,
+    resnet18, resnet34, resnet50, resnext101_32x8d,
+    ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, ResNeXt101_32X8D_Weights
+)
 import argparse
-from torch.optim import lr_scheduler
+from torch.optim.lr_scheduler import OneCycleLR
 from datetime import datetime
 from multiprocessing import Manager
+from pathlib import Path
 import signal
 import sys
 
 import config
 from hierarchical_model import HIFD2, BackboneWrapper
+from hierarchical_target_generation_utils import init_classifier_biases_from_counts
 from tree_loss import TreeLoss
 from insect_dataset_loader import InsectDataset, DynamicTransform
 from train_test import train, test
+from transforms_utils import build_train_transform, build_test_transform
 
+run_folder = Path(config.RUN_FOLDER)
 
 def arg_parse():
     """Parse command line arguments."""
@@ -38,12 +45,12 @@ def arg_parse():
                        help='dataset name')
     parser.add_argument('--img_size', type=int, default=config.PROGRESSIVE_RESIZE_SCHEDULE['initial'],
                        help='initial image size')
-    parser.add_argument('--lr_adjt', type=str, default='Cos', 
-                       choices=['Cos', 'Step', 'Fixed'],
-                       help='learning rate schedule: Cos, Step, or Fixed')
+    parser.add_argument('--lr_adjt', type=str, default='OneCycle',
+                       choices=['Cos', 'Step', 'Fixed', 'OneCycle'],
+                       help='learning rate schedule: Cos, Step, Fixed or OneCycle')
     parser.add_argument('--device', nargs='+', default=['0'], 
                        help='GPU IDs for training')
-    parser.add_argument('--backbone', type=str, default='mobilenetv3_small', 
+    parser.add_argument('--backbone', type=str, default='mobilenetv3_small',
                        choices=list(config.BACKBONE_CONFIGS.keys()),
                        help='backbone model name')
     parser.add_argument('--use_pretrained', action='store_true', 
@@ -79,49 +86,17 @@ def worker_init_fn(worker_id, epoch_tracker):
     if hasattr(dataset.transform, "set_epoch"):
         dataset.transform.set_epoch(epoch_tracker["current"])
 
-def get_transform(image_size):
+def get_transform(image_size: int):
     """
-    Get training data augmentation transform.
-    
-    Args:
-        image_size: Target image size
-        
-    Returns:
-        Composed transform
+    Centralized training transform (defined in transforms_utils.py).
     """
-    aug = config.TRAIN_AUGMENTATION
-    return transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.RandomResizedCrop(
-            image_size - aug['crop_offset'], 
-            scale=aug['resize_crop_scale']
-        ),
-        transforms.RandomHorizontalFlip() if aug['horizontal_flip'] else transforms.Lambda(lambda x: x),
-        transforms.ColorJitter(**aug['color_jitter']),
-        transforms.RandomRotation(degrees=aug['rotation_degrees']),
-        transforms.RandomAffine(degrees=0, translate=aug['affine_translate']),
-        transforms.ToTensor(),
-        transforms.Normalize(aug['normalize_mean'], aug['normalize_std']),
-    ])
+    return build_train_transform(image_size=image_size, aug=config.TRAIN_AUGMENTATION)
 
-
-def get_test_transform(image_size):
+def get_test_transform(image_size: int):
     """
-    Get test/validation data transform.
-    
-    Args:
-        image_size: Target image size
-        
-    Returns:
-        Composed transform
+    Centralized test/val transform (defined in transforms_utils.py).
     """
-    aug = config.TEST_AUGMENTATION
-    return transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.CenterCrop(image_size - aug['crop_offset']),
-        transforms.ToTensor(),
-        transforms.Normalize(aug['normalize_mean'], aug['normalize_std']),
-    ])
+    return build_test_transform(image_size=image_size, aug=config.TEST_AUGMENTATION)
 
 
 def setup_backbone(backbone_name, use_pretrained=False):
@@ -144,16 +119,20 @@ def setup_backbone(backbone_name, use_pretrained=False):
     backbone_config = config.BACKBONE_CONFIGS[backbone_name]
     num_ftrs = backbone_config['num_ftrs']
     feature_sizes = backbone_config['feature_sizes']
-    
+
     # Create backbone
     if backbone_name == 'resnet18':
-        raw_backbone = models.resnet18(pretrained=False)
+        weights = ResNet18_Weights.DEFAULT if use_pretrained else None
+        raw_backbone = resnet18(weights=weights)
     elif backbone_name == 'resnet34':
-        raw_backbone = models.resnet34(pretrained=False)
+        weights = ResNet34_Weights.DEFAULT if use_pretrained else None
+        raw_backbone = resnet34(weights=weights)
     elif backbone_name == 'resnet50':
-        raw_backbone = models.resnet50(pretrained=False)
+        weights = ResNet50_Weights.DEFAULT if use_pretrained else None
+        raw_backbone = resnet50(weights=weights)
     elif backbone_name == 'resnext101':
-        raw_backbone = models.resnext101_32x8d(pretrained=False)
+        weights = ResNeXt101_32X8D_Weights.DEFAULT if use_pretrained else None
+        raw_backbone = resnext101_32x8d(weights=weights)
     elif backbone_name == 'efficientnetv2_s':
         raw_backbone = timm.create_model('efficientnetv2_s', pretrained=False)
     elif backbone_name == 'mobilenetv3_small':
@@ -236,7 +215,7 @@ def main():
         num_workers=args.worker,
         persistent_workers=True,
         pin_memory=True,
-        prefetch_factor=2,
+        prefetch_factor=4,
         worker_init_fn=lambda worker_id: worker_init_fn(worker_id, epoch_tracker),
         drop_last = False
     )
@@ -247,7 +226,7 @@ def main():
         num_workers=args.worker // 2,
         persistent_workers=True,
         pin_memory=True,
-        prefetch_factor=2,
+        prefetch_factor=4,
         drop_last=False
     )
     
@@ -264,14 +243,23 @@ def main():
         dataset=args.dataset
     )
     net.to(device)
-    
+
+    # 1) Initialize classifier biases from class priors
+    init_classifier_biases_from_counts(
+        net,
+        node_counts_file='node_sample_counts.json',
+        run_folder=run_folder,
+        device=device,
+        # optional: levels=('pf4','pf3','pf2','pf1','leaf'), epsilon=1e-8, tiny_prior_scale=1e-3
+    )
+
     # Setup loss function
     tree_loss = TreeLoss(
         config.HIERARCHY, 
         device, 
         config.RUN_FOLDER,
         alpha=config.TREE_LOSS_ALPHA,
-        invert=config.TREE_LOSS_INVERT,
+        invert=config.ALPHA_LOSS_INVERT,
         sample_count_file=config.NODE_SAMPLE_COUNTS_FILE,
         beta=config.TREE_LOSS_BETA
     )
@@ -295,13 +283,45 @@ def main():
         {'params': net.conv_block_leaf_class.parameters(), 'lr': config.LR_CLASSIFIER},
         {'params': net.backbone.parameters(), 'lr': config.LR_BACKBONE}
     ], momentum=config.MOMENTUM, weight_decay=config.WEIGHT_DECAY)
-    
-    # Setup learning rate scheduler
-    scheduler = lr_scheduler.StepLR(
-        optimizer, 
-        step_size=config.LR_SCHEDULER_STEP_SIZE, 
-        gamma=config.LR_SCHEDULER_GAMMA
+
+    # Calculate total training steps
+    steps_per_epoch = len(trainloader)
+    total_steps = args.epoch * steps_per_epoch
+
+    # OneCycle scheduler
+    scheduler = OneCycleLR(
+        optimizer,
+        max_lr=[
+            config.LR_CLASSIFIER * 2.5,  # Higher peak for classifiers (0.005)
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_CLASSIFIER * 2.5,
+            config.LR_BACKBONE * 2.5  # Lower peak for backbone (0.0005)
+        ],
+        total_steps=total_steps,
+        pct_start=0.4,  # 40% of training for warmup
+        anneal_strategy='cos',
+        div_factor=25.0,  # initial_lr = max_lr / 25
+        final_div_factor=1e4  # min_lr = initial_lr / 1e4
     )
+
+    # # Setup learning rate scheduler
+    # scheduler = lr_scheduler.StepLR(
+    #     optimizer,
+    #     step_size=config.LR_SCHEDULER_STEP_SIZE,
+    #     gamma=config.LR_SCHEDULER_GAMMA
+    # )
     
     # Generate model save name
     now = datetime.now().strftime('%Y-%m-%d_%H-%M')
@@ -333,6 +353,9 @@ def main():
     print("\n" + "="*70)
     print("FINAL EVALUATION")
     print("="*70)
+
+    final_eval_size = config.PROGRESSIVE_RESIZE_SCHEDULE["final"]
+
     test(
         net, 
         testloader, 
@@ -342,7 +365,7 @@ def main():
         trainset,
         config.HIERARCHY, 
         get_test_transform, 
-        image_size, 
+        final_eval_size,
         run_folder=config.RUN_FOLDER
     )
 

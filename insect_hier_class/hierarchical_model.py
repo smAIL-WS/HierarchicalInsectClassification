@@ -9,25 +9,44 @@ import torch.nn.functional as F
 
 import config
 
-
 class BackboneWrapper(nn.Module):
     """
     Wrapper to standardize output from different backbone architectures.
     Removes classifier heads and provides feature extraction interface.
+    Ensures ResNet returns spatial feature maps (exclude avgpool/fc).
     """
-    
+
     def __init__(self, backbone):
         super().__init__()
         self.backbone = backbone
-        
-        # Remove classifier if it exists (e.g., MobileNetV3, EfficientNet)
+
+        # Remove classifier heads if present
         if hasattr(self.backbone, 'classifier'):
             self.backbone.classifier = nn.Identity()
         if hasattr(self.backbone, 'fc'):
             self.backbone.fc = nn.Identity()
-    
+
+        # Detect if it's a torchvision ResNet
+        self.is_resnet = all(
+            hasattr(self.backbone, name) for name in
+            ['conv1', 'bn1', 'relu', 'maxpool', 'layer1', 'layer2', 'layer3', 'layer4']
+        )
+
     def forward(self, x):
-        """Extract features from backbone."""
+        if self.is_resnet:
+            # Run ResNet up to layer4 (exclude avgpool/fc)
+            x = self.backbone.conv1(x)
+            x = self.backbone.bn1(x)
+            x = self.backbone.relu(x)
+            x = self.backbone.maxpool(x)
+
+            x = self.backbone.layer1(x)
+            x = self.backbone.layer2(x)
+            x = self.backbone.layer3(x)
+            x = self.backbone.layer4(x)
+            return x
+
+        # For timm models or MobileNet
         if hasattr(self.backbone, 'forward_features'):
             return self.backbone.forward_features(x)
         elif hasattr(self.backbone, 'features'):
@@ -166,6 +185,7 @@ class HIFD2(nn.Module):
         self.backbone = model
         self.pooling = nn.AdaptiveAvgPool2d(1)
         self.relu = nn.ReLU(inplace=True)
+        self.gelu = nn.GELU()
 
         # Convolutional refinement blocks per level
         self.conv_block_pf4 = create_conv_block(num_ftrs, sizes['pf4'])
@@ -211,7 +231,7 @@ class HIFD2(nn.Module):
         # Remove the separate leaf_sig and leaf_soft classifiers
         # Use single classifier with raw logits
 
-    def forward(self, x):
+    def forward(self, x, masks_dict=None):
         """
         Forward pass through hierarchical model.
 
@@ -245,27 +265,74 @@ class HIFD2(nn.Module):
         x_pf1_fc = self.fc_pf1(x_pf1_fc)
         x_leaf_class_fc = self.fc_leaf_class(x_leaf_class_fc)
 
-        # Hierarchical feature aggregation with ReLU
-        # Each level accumulates features from coarser levels
+        # masked aggregation
+        if masks_dict is not None:
+            B = x_pf4_fc.size(0)
+            dev = x_pf4_fc.device
+
+            def m(name):
+                mask = masks_dict.get(name, None)
+                if mask is None:
+                    return torch.zeros(B, 1, dtype=torch.float32, device=dev)
+                return mask.to(dev).float().unsqueeze(1)
+
+            m_pf4 = m('pf4');
+            m_pf3 = m('pf3');
+            m_pf2 = m('pf2');
+            m_pf1 = m('pf1');
+            m_leaf = m('leaf')
+
+            x_pf4_m = x_pf4_fc * m_pf4
+            x_pf3_m = x_pf3_fc * m_pf3
+            x_pf2_m = x_pf2_fc * m_pf2
+            x_pf1_m = x_pf1_fc * m_pf1
+            x_leaf_m = x_leaf_class_fc * m_leaf
+
+            aggregated_features = self.gelu(
+                x_pf4_m + x_pf3_m + x_pf2_m + x_pf1_m + x_leaf_m
+            )
+        else:
+            aggregated_features = self.gelu(
+                x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc + x_leaf_class_fc
+            )
+
+        # # **Share aggregated features back to intermediate levels**
+        # # This allows gradients from leaf to flow back through all levels
+        # y_pf4 = self.classifier_pf4(
+        #     self.relu(x_pf4_fc + config.BIDIRECTIONAL_FEATURE_WEIGHTS['pf4'] * aggregated_features))
+        #
+        # y_pf3 = self.classifier_pf3(self.relu(
+        #     x_pf4_fc + x_pf3_fc + config.BIDIRECTIONAL_FEATURE_WEIGHTS['pf3'] * aggregated_features
+        # ))
+        #
+        # y_pf2 = self.classifier_pf2(self.relu(
+        #     x_pf4_fc + x_pf3_fc + x_pf2_fc + config.BIDIRECTIONAL_FEATURE_WEIGHTS['pf2'] * aggregated_features
+        #     # Stronger connection
+        # ))
+        #
+        # y_pf1 = self.classifier_pf1(self.relu(
+        #     x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc + config.BIDIRECTIONAL_FEATURE_WEIGHTS[
+        #         'pf1'] * aggregated_features  # Stronger connection
+        # ))
+        #
+        # y_leaf = self.classifier_leaf(self.relu(
+        #     x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc + x_leaf_class_fc
+        # ))
+        #
+        # # Return raw logits - apply sigmoid/softmax in loss functions
+        # return y_pf4, y_pf3, y_pf2, y_pf1, y_leaf
+
+        # **Share aggregated features back to intermediate levels**
+        # This allows gradients from leaf to flow back through all levels
         y_pf4 = self.classifier_pf4(self.relu(x_pf4_fc))
 
-        y_pf3 = self.classifier_pf3(self.relu(
-            x_pf4_fc + x_pf3_fc
-        ))
+        y_pf3 = self.classifier_pf3(self.relu(x_pf4_fc + x_pf3_fc))
 
-        y_pf2 = self.classifier_pf2(self.relu(
-            x_pf4_fc + x_pf3_fc + x_pf2_fc
-        ))
+        y_pf2 = self.classifier_pf2(self.relu(x_pf4_fc + x_pf3_fc + x_pf2_fc))
 
-        y_pf1 = self.classifier_pf1(self.relu(
-            x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc
-        ))
+        y_pf1 = self.classifier_pf1(self.relu(x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc))
 
-        aggregated_features = self.relu(
-            x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc + x_leaf_class_fc
-        )
-
-        y_leaf = self.classifier_leaf(aggregated_features)
+        y_leaf = self.classifier_leaf(self.relu(x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc + x_leaf_class_fc))
 
         # Return raw logits - apply sigmoid/softmax in loss functions
         return y_pf4, y_pf3, y_pf2, y_pf1, y_leaf

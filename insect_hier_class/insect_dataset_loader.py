@@ -11,9 +11,7 @@ from torchvision import transforms
 import config
 import random
 
-from torchvision import transforms
-import random
-
+from transforms_utils import build_train_transform
 
 class DynamicTransform:
     def __init__(self, schedule, aug_config, epoch_tracker):
@@ -40,20 +38,7 @@ class DynamicTransform:
 
     def _build_transform(self, image_size):
         """Build the transform pipeline once and cache it."""
-        aug = self.aug
-        return transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.RandomResizedCrop(
-                image_size - aug['crop_offset'],
-                scale=aug['resize_crop_scale']
-            ),
-            transforms.RandomHorizontalFlip() if aug['horizontal_flip'] else transforms.Lambda(lambda x: x),
-            transforms.ColorJitter(**aug['color_jitter']),
-            transforms.RandomRotation(degrees=aug['rotation_degrees']),
-            transforms.RandomAffine(degrees=0, translate=aug['affine_translate']),
-            transforms.ToTensor(),
-            transforms.Normalize(aug['normalize_mean'], aug['normalize_std']),
-        ])
+        return build_train_transform(image_size=image_size, aug=self.aug)
 
     def __call__(self, img):
         image_size = self.get_image_size()
@@ -129,24 +114,6 @@ class InsectDataset(data.Dataset):
                     if (i + 1) % 10000 == 0:
                         print(f"  Loaded {i + 1}/{len(self.image_filenames)} images...")
             print("✓ Preloading complete! All images in RAM.")
-
-        # # Preload all images into RAM
-        # if preload_images:
-        #     print(f"Preloading {len(self.image_filenames)} images into RAM...")
-        #     self.preloaded_images = []
-        #     for i, imagename in enumerate(self.image_filenames):
-        #         try:
-        #             img = Image.open(imagename).convert('RGB')
-        #             self.preloaded_images.append(img)
-        #         except Exception as e:
-        #             print(f"Error loading image {imagename}: {e}")
-        #             self.preloaded_images.append(None)
-        #
-        #         # Progress indicator
-        #         if (i + 1) % 10000 == 0:
-        #             print(f"  Loaded {i + 1}/{len(self.image_filenames)} images...")
-        #
-        #     print(f"✓ Preloading complete! All images in RAM.")
 
     def __getitem__(self, index):
         """

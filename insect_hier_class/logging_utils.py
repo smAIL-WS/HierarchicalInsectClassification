@@ -91,7 +91,7 @@ def log_epoch_summary_to_csv(
     train_loss,
     train_tree_loss,
     train_ce_loss,
-    train_entropy_loss,
+    # train_entropy_loss,
     test_pf4_acc,
     test_pf3_acc,
     test_pf2_acc,
@@ -100,7 +100,7 @@ def log_epoch_summary_to_csv(
     test_loss,
     test_tree_loss,
     test_ce_loss,
-    test_entropy_loss,
+    # test_entropy_loss,
     epoch_time,
     run_folder,
     csv_filename=None  # Optional override
@@ -130,18 +130,18 @@ def log_epoch_summary_to_csv(
     header = [
         "Epoch",
         "Train PF4 Acc", "Train PF3 Acc", "Train PF2 Acc", "Train PF1 Acc", "Train Leaf Acc",
-        "Train Loss", "Train Tree Loss", "Train CE Loss", "Train Entropy Loss",
+        "Train Loss", "Train Tree Loss", "Train CE Loss", # "Train Entropy Loss",
         "Test PF4 Acc", "Test PF3 Acc", "Test PF2 Acc", "Test PF1 Acc", "Test Leaf Acc",
-        "Test Loss", "Test Tree Loss", "Test CE Loss", "Test Entropy Loss",
+        "Test Loss", "Test Tree Loss", "Test CE Loss", # "Test Entropy Loss",
         "Epoch Time (s)"
     ]
 
     row = [
         epoch,
         train_pf4_acc, train_pf3_acc, train_pf2_acc, train_pf1_acc, train_leaf_acc,
-        train_loss, train_tree_loss, train_ce_loss, train_entropy_loss,
+        train_loss, train_tree_loss, train_ce_loss, # train_entropy_loss,
         test_pf4_acc, test_pf3_acc, test_pf2_acc, test_pf1_acc, test_leaf_acc,
-        test_loss, test_tree_loss, test_ce_loss, test_entropy_loss,
+        test_loss, test_tree_loss, test_ce_loss, # test_entropy_loss,
         epoch_time
     ]
 
@@ -157,7 +157,7 @@ def log_epoch_summary_to_csv(
 
 
 
-def log_confusion_matrices_to_pdf(epoch, level_metrics_dict, label_maps, split):
+def log_confusion_matrices_to_pdf(epoch, level_metrics_dict, label_maps, split, run_folder):
     """
     Append confusion matrices to a single PDF file for each level and split per epoch.
 
@@ -166,8 +166,9 @@ def log_confusion_matrices_to_pdf(epoch, level_metrics_dict, label_maps, split):
         level_metrics_dict (dict): Mapping level names to (y_true, y_pred)
         label_maps (dict): Mapping level names to label-to-name dictionaries
         split (str): 'Train' or 'Test'
+        run_folder (Path): Target folder to write the PDF and temp images
     """
-    pdf_path = config.RUN_FOLDER / "confusion_matrices.pdf"
+    pdf_path = run_folder / "confusion_matrices.pdf"
     temp_images = []
 
     for level_name, (y_true, y_pred) in level_metrics_dict.items():
