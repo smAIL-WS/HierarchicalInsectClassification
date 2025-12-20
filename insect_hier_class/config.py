@@ -25,9 +25,9 @@ RUN_DATE = '2025-12-19'  # CHANGE THIS for each new run
 RUN_FOLDER = RUNS_DIR / RUN_DATE
 
 # Logging controls for Hyperparameter optimization
-LOG_PER_CLASS = True     # per-class CSVs
+LOG_PER_CLASS = False     # per-class CSVs
 LOG_PER_LEVEL = True     # per-level CSVs
-LOG_CONFUSION = True     # confusion matrix PDFs
+LOG_CONFUSION = False     # confusion matrix PDFs
 
 # ============================================================================
 # FILE PATHS (relative to RUN_FOLDER)

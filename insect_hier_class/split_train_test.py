@@ -55,8 +55,8 @@ node_counts_path = run_folder / 'node_sample_counts.json'
 min_train_images = 450
 min_test_images = 150
 min_train_ratio = 0.75
-max_train_images = 1800
-max_test_images = 600
+max_train_images = 18000
+max_test_images = 6000
 require_multiple_dates = True
 
 # --- Validation controls (NEW) ---
