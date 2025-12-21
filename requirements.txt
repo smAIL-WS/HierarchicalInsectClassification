@@ -6,8 +6,10 @@ matplotlib
 numpy
 opencv-python
 optuna
+optuna-dashboard
 pandas
 pymupdf
+psycopg2-binary
 scikit-learn
 timm
 torch

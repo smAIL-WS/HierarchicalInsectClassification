@@ -60,7 +60,7 @@ max_test_images = 6000
 require_multiple_dates = True
 
 # --- Validation controls (NEW) ---
-train_val_test_split = False               # Set False to keep original train/test-only behavior
+train_val_test_split = True               # Set False to keep original train/test-only behavior
 val_ratio_within_train = 0.20             # 20% of train per class (target, before guardrails)
 allow_train_val_leak = True               # Allowed only when a class has exactly one train device-day group
 

@@ -21,7 +21,7 @@ PRETRAINED_DIR = BASE_DIR.parent / 'pre-trained'
 # ============================================================================
 # RUN CONFIGURATION (Main setting to change between runs)
 # ============================================================================
-RUN_DATE = '2025-12-19'  # CHANGE THIS for each new run
+RUN_DATE = '2025-12-21'  # CHANGE THIS for each new run
 RUN_FOLDER = RUNS_DIR / RUN_DATE
 
 # Logging controls for Hyperparameter optimization

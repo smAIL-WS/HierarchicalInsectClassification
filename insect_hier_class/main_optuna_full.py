@@ -215,7 +215,7 @@ def objective(trial: optuna.trial.Trial):
     return final_val_loss
 
 if __name__ == "__main__":
-    DB_URL = "postgresql://myuser:HNRhnr@10.154.29.22:5432/mydb"  # Replace with actual credentials
+    DB_URL = "postgresql://myuser:HRNhrn@10.154.29.22:5432/mydb?sslmode=require"  # Replace with actual credentials
 
     # Pruner configuration matching your constraints:
     # - First 10 trials are never pruned (startup).

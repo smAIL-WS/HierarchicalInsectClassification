@@ -16,6 +16,9 @@ A fresh, minimal implementation for training hierarchical models on insect datas
 ### 1. Prepare the Data Split
 Before training, you must generate the dataset split files.
 - Open `insect_hier_class/split_train_test.py`.
+- Note: For hyperparameter optimization a train/val/test split is required. For standard training, only train/test splits are required.
+- Ensure the line: 
+  - `train_val_test_split = False               # Set False to keep original train/test-only behavior` is set correctly.
 - If needed, adjust the sampling limits:
   - `max_train_images`: Maximum images per class for training. (1800 for balanced, 18000 for moderately imbalanced, None for full dataset)
   - `max_test_images`: Maximum images per class for testing. (600 for balanced, 6000 for moderately imbalanced, None for full dataset)
