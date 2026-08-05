@@ -4,6 +4,22 @@ A hierarchical deep learning framework for insect classification using a multi-l
 
 This repository contains the source code used for dataset preparation, model training, hyperparameter optimisation, and evaluation. Data artefacts, trained model weights, and metadata required to reproduce the experiments are available separately through Zenodo.
 
+## Associated Resources
+
+### Publication
+
+Mahfoud et al., *Deep learning-based hierarchical insect classification using camera trap imagery* (submitted for publication, 2026)
+
+### GitHub Repository
+
+https://github.com/smAIL-WS/HierarchicalInsectClassification
+
+### Zenodo Archive
+
+Dataset, trained model weights, metadata, hierarchy files, train/validation/test splits, evaluation outputs, and reproducibility artefacts are available via Zenodo:
+
+<ZENODO DOI OR URL>
+
 ---
 
 # Repository and Data Availability
@@ -383,8 +399,12 @@ The values used for the experiments reported in the paper are documented below.
 Run:
 
 ```bash
-python insect_hier_class/main.py
+python main.py --backbone resnet18 --use_pretrained
 ```
+
+Alternative backbones can be selected using the `--backbone` argument.
+
+For a full list of available backbones, see: `insect_hier_class/config.py`
 
 ## Hyperparameter Optimisation
 
@@ -599,6 +619,15 @@ Although seeds were fixed, exact reproducibility may still vary slightly across 
 
 ---
 
+
+### Backbone
+
+The experiments reported in the paper used: 
+```bash
+python main.py --backbone resnet18 --use_pretrained
+```
+with the architecture-specific configuration defined in `config.py`.
+
 ## Training Schedule
 
 Models were trained for:
@@ -676,8 +705,8 @@ TREE_LOSS_BETA = 0.999995
 
 HIERARCHY_WEIGHT = 4.4
 
-ALPHA_START = 1.2
-ALPHA_TARGET = 0.4
+ALPHA_START = 1.5
+ALPHA_TARGET = 0.3
 CE_WARMUP_EPOCHS = 30
 
 ALPHA_LOSS_INVERT = False
@@ -893,5 +922,5 @@ Responsible for:
 If you use this repository, please cite:
 
 1. The associated publication.
-2. The GitHub repository.
+2. The GitHub repository: https://github.com/smAIL-WS/HierarchicalInsectClassification
 3. The Zenodo archive DOI.

@@ -191,8 +191,8 @@ TREE_LOSS_BETA = 0.999995  # For effective class weighting. Must be less than 1.
 HIERARCHY_WEIGHT = 4.4
 
 # Cross-Entropy alpha schedule
-ALPHA_START = 1.2        # Initial CE alpha
-ALPHA_TARGET = 0.4       # Final CE alpha
+ALPHA_START = 1.5        # Initial CE alpha
+ALPHA_TARGET = 0.3       # Final CE alpha
 CE_WARMUP_EPOCHS = 30    # Total epochs for CE alpha decay
 ALPHA_LOSS_INVERT = False # If True, deeper nodes (towards leaf classes) get higher weights
 
@@ -214,16 +214,6 @@ LABEL_SMOOTHING = 0.1
 SENTINEL_VALUE = -1
 
 HIER_CONF_THRESHOLD = 0.4
-
-# # ============================================================================
-# # BI-DIRECTIONAL LEARNING RATE SCHEDULE
-# # ============================================================================
-# BIDIRECTIONAL_FEATURE_WEIGHTS = {
-#     'pf4': 0.05,
-#     'pf3': 0.1,
-#     'pf2': 0.15,
-#     'pf1': 0.2
-# }
 
 
 # ============================================================================
