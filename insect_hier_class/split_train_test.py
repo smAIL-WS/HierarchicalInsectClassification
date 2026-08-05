@@ -10,12 +10,15 @@ import math
 from collections import defaultdict, Counter
 from pathlib import Path
 
+import config
+
 # =========================
 # Configuration
 # =========================
 random.seed(42)
 
-db_path = '/Projects/FAIR_Device_data/Zaki/preprocess/insect_images_final.duckdb'
+db_path = str(config.DUCKDB_PATH)
+# db_path = '/Projects/FAIR_Device_data/Zaki/preprocess/insect_images_final.duckdb'
 table_name = 'cropped_images_optim'
 
 base_dir = Path(__file__).resolve().parent
@@ -42,7 +45,7 @@ sys.stdout = DualLogger(log_path)
 
 train_txt_path = run_folder / 'insect_train_list.txt'
 test_txt_path = run_folder / 'insect_test_list.txt'
-val_txt_path = run_folder / 'insect_val_list.txt'  # NEW (only written when enabled)
+val_txt_path = run_folder / 'insect_val_list.txt'  # (only written when enabled)
 
 tree_file_path = run_folder / 'hierarchy_tree.txt'
 name_map_path = run_folder / 'level_name_maps.json'
@@ -60,7 +63,7 @@ max_test_images = 6000
 require_multiple_dates = True
 
 # --- Validation controls (NEW) ---
-train_val_test_split = True               # Set False to keep original train/test-only behavior
+train_val_test_split = False               # Set False to keep original train/test-only behavior
 val_ratio_within_train = 0.20             # 20% of train per class (target, before guardrails)
 allow_train_val_leak = True               # Allowed only when a class has exactly one train device-day group
 
@@ -125,7 +128,7 @@ for _, row in df.iterrows():
     class_date_device_groups[row['classification']][key].append(row)
 
 # =========================
-# Train/Test selection (UNCHANGED)
+# Train/Test selection
 # =========================
 train_rows, test_rows = [], []
 initial_class_image_summary = {}  # train/test counts (pre-val), for diagnostics

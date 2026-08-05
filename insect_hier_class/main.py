@@ -2,6 +2,7 @@
 Main training script for hierarchical insect classification.
 Uses centralized configuration from config.py.
 """
+import os
 import random
 import numpy as np
 import timm
@@ -187,6 +188,12 @@ def main():
     
     # Load datasets
     train_list = config.get_train_list_path()
+    val_list = config.get_val_list_path()  # returns None or path depending on split
+    if val_list is not None and os.path.exists(val_list):
+        combined_train_lists = [train_list, val_list]
+    else:
+        combined_train_lists = train_list
+
     test_list = config.get_test_list_path()
 
     # === DynamicTransform ===
@@ -198,7 +205,7 @@ def main():
     )
 
     # Apply dynamic transform to training dataset
-    trainset = InsectDataset(train_list, input_transform=dynamic_transform)
+    trainset = InsectDataset(combined_train_lists, input_transform=dynamic_transform)
 
     # Keep test transform logic unchanged
     transform_test = get_test_transform(image_size)
@@ -310,7 +317,7 @@ def main():
             config.LR_BACKBONE * 2.5  # Lower peak for backbone (0.0005)
         ],
         total_steps=total_steps,
-        pct_start=0.4,  # 40% of training for warmup
+        pct_start=0.3,  # 30% of training for warmup
         anneal_strategy='cos',
         div_factor=25.0,  # initial_lr = max_lr / 25
         final_div_factor=1e4  # min_lr = initial_lr / 1e4

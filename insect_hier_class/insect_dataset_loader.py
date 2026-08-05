@@ -4,6 +4,7 @@ Dataset classes for hierarchical insect classification.
 
 import cv2
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 import torch
 import torch.utils.data as data
 from PIL import Image
@@ -54,17 +55,24 @@ class DynamicTransform:
 class InsectDataset(data.Dataset):
     """
     Dataset for insect images with hierarchical labels.
-    Loads image paths and leaf-level labels from a text file.
+    Loads image paths and leaf-level labels from one or more text files.
     """
 
     def __init__(self, list_path, input_transform=None, preload_images=True, use_threads=False, num_workers=12):
         """
         Args:
-            list_path: Path to text file with format: <image_path> <label> <class_name>
+            list_path: Either a string(single list file) or a list of strings
+            specifying multiple list files to combine with format: <image_path> <label> <class_name>.
             input_transform: Optional transform to apply to images
             preload_images: If True, load all images into RAM at initialization
         """
         super(InsectDataset, self).__init__()
+
+        # Normalize input: always operate on a list of paths
+        if isinstance(list_path, (str, Path)):
+            list_paths = [list_path]
+        else:
+            list_paths = list_path
 
         self.image_filenames = []
         self.labels = []  # Leaf-level integer labels
@@ -73,20 +81,30 @@ class InsectDataset(data.Dataset):
         self.transform = input_transform
         self.preloaded_images = None  # Will store PIL images if preloading
 
-        with open(list_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split(' ')
-                imagename = parts[0]
-                leaf_label = int(parts[1])
-                class_name = parts[2]
+        # Load every list file in order
+        for path in list_paths:
+            with open(path, 'r') as f:
+                for line in f:
+                    parts = line.strip().split(' ')
 
-                self.image_filenames.append(imagename)
-                self.labels.append(leaf_label)
-                self.class_names.append(class_name)
+                    path_str = parts[0]
+                    path_obj = Path(path_str)
 
-                # Build label-to-name mapping
-                if leaf_label not in self.label_to_name:
-                    self.label_to_name[leaf_label] = class_name
+                    if path_obj.is_absolute():
+                        imagename = str(path_obj)
+                    else:
+                        imagename = str(config.DATASET_ROOT / path_obj)
+
+                    leaf_label = int(parts[1])
+                    class_name = parts[2]
+
+                    self.image_filenames.append(imagename)
+                    self.labels.append(leaf_label)
+                    self.class_names.append(class_name)
+
+                    # Build label-to-name mapping
+                    if leaf_label not in self.label_to_name:
+                        self.label_to_name[leaf_label] = class_name
 
         print(f"Loaded {len(self.image_filenames)} images with leaf-level labels.")
 
@@ -104,6 +122,8 @@ class InsectDataset(data.Dataset):
 
         if preload_images:
             print(f"Preloading {len(self.image_filenames)} images into RAM using OpenCV...")
+            cv2.setNumThreads(0)
+
             if use_threads:
                 with ThreadPoolExecutor(max_workers=num_workers) as executor:
                     self.preloaded_images = list(executor.map(load_image_cv2, self.image_filenames))
@@ -145,3 +165,24 @@ class InsectDataset(data.Dataset):
 
     def __len__(self):
         return len(self.image_filenames)
+
+    # ---------------------------
+    # Cleanup hook for HPO teardown
+    # ---------------------------
+    def close(self):
+        """
+        Release large references so GC can reclaim memory promptly between trials.
+        This does NOT affect intra-trial performance; call it only at trial end.
+        """
+        self.preloaded_images = None
+        self.image_filenames = None
+        self.labels = None
+        self.class_names = None
+        self.label_to_name = None
+        self.transform = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

@@ -103,27 +103,37 @@ def build_train_transform(image_size: int, aug: Dict[str, Any]) -> T.Compose:
     gb_prob = float(aug.get("gaussian_blur_prob", 0.0))
     gb_kernel = int(aug.get("gaussian_kernel_size", 3))
 
-    return T.Compose(
-        [
-            LetterboxPadToSquareReflect(target_size=image_size, interpolation=InterpolationMode.BILINEAR),
-            T.RandomHorizontalFlip(p=horiz_flip_p),
-            T.RandomVerticalFlip(p=vert_flip_p),
-            T.ColorJitter(**color_jitter),
-            T.RandomRotation(degrees=rotation_deg, expand=False, fill=rotation_fill),
-            T.RandomAffine(
-                degrees=0,
-                translate=(tx, ty),
-                scale=(affine_zoom_min, affine_zoom_max),
-                fill=affine_fill,
-            ),
-            T.RandomApply([T.GaussianBlur(kernel_size=gb_kernel, sigma=(0.1, 1.0))], p=gb_prob),
-            T.ToTensor(),
-            T.Normalize(
-                mean=aug.get("normalize_mean", (0.5, 0.5, 0.5)),
-                std=aug.get("normalize_std", (0.5, 0.5, 0.5)),
-            ),
-        ]
-    )
+    re_prob = float(aug.get("random_erasing_prob", 0.0))
+    re_scale = aug.get("random_erasing_scale", (0.02, 0.33))
+
+    transform_list = [
+        LetterboxPadToSquareReflect(target_size=image_size, interpolation=InterpolationMode.BILINEAR),
+        T.RandomHorizontalFlip(p=horiz_flip_p),
+        T.RandomVerticalFlip(p=vert_flip_p),
+        T.ColorJitter(**color_jitter),
+        T.RandomRotation(degrees=rotation_deg, expand=False, fill=rotation_fill),
+        T.RandomAffine(
+            degrees=0,
+            translate=(tx, ty),
+            scale=(affine_zoom_min, affine_zoom_max),
+            fill=affine_fill,
+        ),
+        T.RandomApply([T.GaussianBlur(kernel_size=gb_kernel, sigma=(0.1, 1.0))], p=gb_prob),
+        T.ToTensor(),
+        T.Normalize(
+            mean=aug.get("normalize_mean", (0.5, 0.5, 0.5)),
+            std=aug.get("normalize_std", (0.5, 0.5, 0.5)),
+        ),
+    ]
+
+    # Add Random Erasing after normalization
+    if re_prob > 0:
+        # 'value' can be a single int (0), a tuple (R, G, B), or a string "random"
+        # If you have the RGB average (e.g. 114, 111, 103), use that:
+        fill_value = aug.get("random_erasing_fill_value", 0)
+        transform_list.append(T.RandomErasing(p=re_prob, scale=re_scale, value=fill_value))
+
+    return T.Compose(transform_list)
 
 
 def build_test_transform(image_size: int, aug: Dict[str, Any]) -> T.Compose:

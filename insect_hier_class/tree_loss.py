@@ -203,81 +203,23 @@ class TreeLoss(nn.Module):
         
         return torch.mean(loss)
 
-    def inference(self, fs, device):
-        """
-        Compute marginal probabilities for all nodes (vectorized, optimized).
+    def compute_true_marginals(self, fs_sigmoid: torch.Tensor, device: torch.device) -> torch.Tensor:
+            S = self.stateSpace_unweighted.to(device).contiguous()  # [S, N]
+            X = fs_sigmoid.to(device).contiguous()  # [B, N]
+            # index[s, b] = <S[s], X[b]>
+            index = torch.matmul(S, X.T)  # [S, B]
+            # Log-sum-exp stabilization per column (per sample)
+            max_vals = index.max(dim=0, keepdim=True).values  # [1, B]
+            J = torch.exp(index - max_vals)  # [S, B]
+            Z = J.sum(dim=0, keepdim=False)  # [B]
 
-        Args:
-            fs: Model outputs [batch_size, num_nodes]
-            device: Device
-
-        Returns:
-            Marginal probability matrix [batch_size, num_nodes]
-        """
-        with torch.no_grad():
-            stateSpace = self.stateSpace_unweighted.to(device)  # [num_states, num_nodes]
-            fs = fs.to(device)  # [batch_size, num_nodes]
-
-            # Compute joint probabilities
-            index = torch.mm(stateSpace, fs.T)  # [num_states, batch_size]
-            joint = torch.exp(index)  # [num_states, batch_size]
-            z = torch.sum(joint, dim=0)  # [batch_size]
-
-            # Mask for active states per node
-            mask = (stateSpace > 0).float()  # [num_states, num_nodes]
-            state_counts = torch.sum(mask, dim=0)  # [num_nodes]
-
-            # Compute raw sums for all nodes and batches using einsum
-            # 'sn,sb->nb' means: sum over states (s), multiply mask(sn) with joint(sb)
-            raw_sum = torch.einsum('sn,sb->nb', mask, joint)  # [num_nodes, batch_size]
-
-            # Normalize by state_counts and z (broadcasted)
-            raw_sum /= (state_counts.unsqueeze(1) + 1e-10)  # [num_nodes, batch_size]
-            raw_sum /= z.unsqueeze(0)  # [num_nodes, batch_size]
-
-            # Transpose to [batch_size, num_nodes]
-            pMargin = raw_sum.T.contiguous()
-
-            return pMargin
-
-    # def inference(self, fs, device):
-    #     """
-    #     Compute marginal probabilities for all nodes (for inference).
-    #
-    #     Args:
-    #         fs: Model outputs
-    #         device: Device
-    #
-    #     Returns:
-    #         Marginal probability matrix [batch_size, num_nodes]
-    #     """
-    #     with torch.no_grad():
-    #         stateSpace = self.stateSpace_unweighted
-    #         fs = fs.to(device)
-    #
-    #         index = torch.mm(stateSpace, fs.T)
-    #         joint = torch.exp(index)
-    #         z = torch.sum(joint, dim=0)
-    #
-    #         # pMargin = torch.zeros((fs.shape[0], fs.shape[1]), dtype=torch.float32, device=device)
-    #         # for i in range(fs.shape[0]):
-    #         #     for j in range(fs.shape[1]):
-    #         #         mask_indices = torch.where(stateSpace[:, j] > 0)[0]
-    #         #         if len(mask_indices) > 0:
-    #         #             pMargin[i, j] = torch.sum(joint[mask_indices, i]) / z[i]
-    #
-    #         pMargin = torch.zeros((fs.shape[0], fs.shape[1]), dtype=torch.float32, device=device)
-    #         state_counts = torch.sum(stateSpace > 0, dim=0)  # [num_nodes], count of states per node
-    #
-    #         for i in range(fs.shape[0]):
-    #             for j in range(fs.shape[1]):
-    #                 mask_indices = torch.where(stateSpace[:, j] > 0)[0]
-    #                 if len(mask_indices) > 0:
-    #                     raw_sum = torch.sum(joint[mask_indices, i])
-    #                     normalized_sum = raw_sum / (state_counts[j] + 1e-10)  # avoid div by zero
-    #                     pMargin[i, j] = normalized_sum / z[i]
-    #
-    #         return pMargin
+            # mask[s, n] = 1 if node n is active in state s, else 0
+            mask = (S > 0).float()  # [S, N]
+            # raw_sum[n, b] = sum_s mask[s,n] * J[s,b]
+            raw_sum = torch.matmul(mask.T, J)  # [N, B]
+            # normalize by Z (broadcast), transpose back to [B, N]
+            pMargin = (raw_sum / (Z.unsqueeze(0) + 1e-10)).T.contiguous()
+            return pMargin  # [B, N]
 
     def compute_level_weights(self, hierarchy):
         """
@@ -481,79 +423,3 @@ class TreeLoss(nn.Module):
             print(f"Warning: State space generation mismatch. Expected {expected_states} states, got {i}")
 
         return stateSpace
-
-    # def generateStateSpace(self, hierarchy, alpha=0.3, invert=True):
-    #     """
-    #     Generate state space matrix with depth-based weighting.
-    #
-    #     Args:
-    #         hierarchy: List of hierarchy paths
-    #         alpha: Depth weighting parameter
-    #         invert: If True, deeper nodes get higher weights
-    #
-    #     Returns:
-    #         State space matrix [num_states + 1, num_nodes]
-    #     """
-    #     total_nodes = max(max(path) for path in hierarchy) + 1
-    #
-    #     # Initialize state space and tracking arrays
-    #     stateSpace = torch.zeros(total_nodes + 1, total_nodes, dtype=torch.float32)
-    #     recorded = torch.zeros(total_nodes, dtype=torch.bool)
-    #     node_depths = torch.full((total_nodes,), -1, dtype=torch.int)
-    #
-    #     # Record depth for each node
-    #     for path in hierarchy:
-    #         for depth, node in enumerate(path):
-    #             if node_depths[node] == -1:
-    #                 node_depths[node] = depth
-    #
-    #     i = 1  # State counter (row 0 is kept as all zeros)
-    #
-    #     for path in hierarchy:
-    #         if len(path) == 0:
-    #             continue
-    #
-    #         classification = path[-1]
-    #         parents = path[:-1]
-    #
-    #         # Handle single-level path (no parents)
-    #         if len(parents) == 0:
-    #             if not recorded[classification]:
-    #                 depth_val = node_depths[classification].item()
-    #                 weight = math.exp(alpha * depth_val) if invert else math.exp(-alpha * depth_val)
-    #                 stateSpace[i, classification] = weight
-    #                 recorded[classification] = True
-    #                 i += 1
-    #             continue
-    #
-    #         # Record intermediate states for each parent
-    #         for d in range(len(parents)):
-    #             node = parents[d]
-    #             if not recorded[node]:
-    #                 for j in range(d + 1):
-    #                     parent_node = parents[j]
-    #                     depth_val = node_depths[parent_node].item()
-    #                     weight = math.exp(alpha * depth_val) if invert else math.exp(-alpha * depth_val)
-    #                     stateSpace[i, parent_node] = weight
-    #                 recorded[node] = True
-    #                 i += 1
-    #
-    #         # Final state: all parents + classification
-    #         if not recorded[classification]:
-    #             for parent_node in parents:
-    #                 depth_val = node_depths[parent_node].item()
-    #                 weight = math.exp(alpha * depth_val) if invert else math.exp(-alpha * depth_val)
-    #                 stateSpace[i, parent_node] = weight
-    #
-    #             depth_val = node_depths[classification].item()
-    #             weight = math.exp(alpha * depth_val) if invert else math.exp(-alpha * depth_val)
-    #             stateSpace[i, classification] = weight
-    #             recorded[classification] = True
-    #             i += 1
-    #
-    #     # Validate state space
-    #     expected_states = total_nodes + 1
-    #     if i != expected_states:
-    #         print(f"Warning: State space generation mismatch. Expected {expected_states} states, got {i}")
-    #
-    #     return stateSpace

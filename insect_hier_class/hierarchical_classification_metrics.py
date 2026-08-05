@@ -78,7 +78,7 @@ def greedy_top_down_prediction(pMargin_np, hierarchy_structure):
     return predicted_paths
 
 
-def compute_metrics(y_true, y_pred, level_name):
+def compute_metrics(y_true, y_pred, level_name, related_info=None):
     """
     Compute and print aggregate metrics for a hierarchy level.
 
@@ -86,6 +86,7 @@ def compute_metrics(y_true, y_pred, level_name):
         y_true: Ground truth labels
         y_pred: Predicted labels
         level_name: Name of the hierarchy level
+        related_info: List of (true_id, was_related) tuples
     """
     if len(y_true) == 0 or len(y_pred) == 0:
         print(f"{level_name}: No valid samples to compute metrics")
@@ -98,8 +99,12 @@ def compute_metrics(y_true, y_pred, level_name):
     print(f"  F1 Score:  {f1_score(y_true, y_pred, average='macro', zero_division=0):.4f}")
     print(f"  MCC:       {matthews_corrcoef(y_true, y_pred):.4f}")
 
+    if related_info and len(related_info) > 0:
+        rel_acc = np.mean([item[1] for item in related_info])
+        print(f"  Related Accuracy: {rel_acc:.4f}")
 
-def print_per_class_metrics(y_true, y_pred, level_name, label_map=None):
+
+def print_per_class_metrics(y_true, y_pred, level_name, label_map=None, related_info=None):
     """
     Print per-class precision, recall, and F1 score.
     Handles classes with zero predictions by including all classes present in ground truth.
@@ -109,6 +114,7 @@ def print_per_class_metrics(y_true, y_pred, level_name, label_map=None):
         y_pred: Predicted labels
         level_name: Name of the hierarchy level
         label_map: Dict mapping label indices to names
+        related_info: List of (true_id, was_related) tuples
     """
     if len(y_true) == 0 or len(y_pred) == 0:
         print(f"\n{level_name} Per-Class Metrics: No valid samples")
@@ -128,13 +134,27 @@ def print_per_class_metrics(y_true, y_pred, level_name, label_map=None):
         if pred in pred_counts:
             pred_counts[pred] += 1
 
+    # Map related errors to class IDs
+    related_map = {}
+    if related_info:
+        for tid, was_rel in related_info:
+            if tid not in related_map:
+                related_map[tid] = []
+            related_map[tid].append(was_rel)
+
     print(f"\n{level_name} Per-Class Metrics:")
     for i, cls in enumerate(unique_classes):
         name = label_map.get(str(cls), f"Class {cls}") if label_map else f"Class {cls}"
         pred_count = pred_counts[cls]
         zero_flag = " [ZERO PRED]" if pred_count == 0 else ""
+
+        rel_str = ""
+        if cls in related_map:
+            rel_pct = np.mean(related_map[cls])
+            rel_str = f", RelErr={rel_pct:.4f}"
+
         print(f"  {cls:3d} ({name:30s}): P={precision[i]:.4f}, R={recall[i]:.4f}, "
-              f"F1={f1[i]:.4f}, Preds={pred_count:4d}{zero_flag}")
+              f"F1={f1[i]:.4f}{rel_str}, Preds={pred_count:4d}{zero_flag}")
 
 
 def filter_invalid(y_true, y_pred, sentinel=-1):
@@ -175,222 +195,160 @@ def load_level_name_maps(filename, run_folder):
         return json.load(f)
 
 
+@torch.no_grad()
+def per_level_marginal_argmax(marginals, level_order, level_nodes):
+    """Fallback: choose argmax of marginals per level."""
+    device = marginals.device
+    per_level = {}
+    for lvl in level_order:
+        ids = torch.as_tensor(level_nodes[lvl], device=device, dtype=torch.long)
+        per_level[lvl] = ids[marginals[:, ids].argmax(dim=1)]
+    return per_level
+
+
+@torch.no_grad()
+def map_decode_paths(fs_sigmoid, stateSpace_unweighted, level_order, level_nodes):
+    """Vectorized MAP decoder over legal states."""
+    device = fs_sigmoid.device
+    S = stateSpace_unweighted.to(device)
+    scores = torch.matmul(S, fs_sigmoid.T)
+    best_state_idx = scores.argmax(dim=0)
+    best_states = S[best_state_idx]
+
+    path_nodes_global = {}
+    for lvl in level_order:
+        ids = torch.as_tensor(level_nodes[lvl], device=device, dtype=torch.long)
+        active = best_states[:, ids] > 0
+        lvl_pred = torch.full((fs_sigmoid.shape[0],), -1, device=device, dtype=torch.long)
+        has_any = active.any(dim=1)
+        idx_in_level = active.float().argmax(dim=1)
+        lvl_pred[has_any] = ids[idx_in_level[has_any]]
+        path_nodes_global[lvl] = lvl_pred
+    return {"path_nodes_global": path_nodes_global, "best_state_idx": best_state_idx}
+
+
+@torch.no_grad()
+def map_truncate_with_threshold(marginals, map_paths, targets_per_level, level_order, global_index_ranges, threshold,
+                                sentinel=-1):
+    """Robust back-off truncation logic that handles imbalanced paths (-1 indices)."""
+    device = marginals.device
+    B = marginals.shape[0]
+    avail = torch.stack([(targets_per_level[lvl] != sentinel) for lvl in level_order], dim=1).to(device)
+    deepest_idx = (len(level_order) - 1) - torch.flip(avail.int(), dims=[1]).argmax(dim=1)
+
+    final_node = torch.full((B,), -1, device=device, dtype=torch.long)
+    final_level = deepest_idx.clone()
+    final_conf = torch.zeros(B, device=device)
+
+    for d in reversed(range(len(level_order))):
+        lvl = level_order[d]
+        mask = (final_level >= d) & (final_node == -1)
+        if not mask.any(): continue
+
+        candidates = map_paths[lvl][mask]
+
+        # FIX: Handle cases where the MAP path is shorter than the current level (-1)
+        valid_cand_mask = (candidates >= 0)
+        confs = torch.zeros_like(candidates, dtype=torch.float32, device=device)
+
+        if valid_cand_mask.any():
+            # Only gather confidence for batch indices that actually have a node at this level
+            valid_indices = candidates[valid_cand_mask]
+            gathered = torch.gather(marginals[mask][valid_cand_mask], 1, valid_indices.unsqueeze(1)).squeeze(1)
+            confs[valid_cand_mask] = gathered
+
+        # If confidence >= threshold OR if backed all the way to root, accept
+        accept = (confs >= threshold) | (d == 0)
+
+        indices = torch.where(mask)[0][accept]
+        final_node[indices] = candidates[accept]
+        final_level[indices] = d
+        final_conf[indices] = confs[accept]
+
+    return {"final_selected_node_global": final_node, "final_selected_level_idx": final_level,
+            "final_selected_confidence": final_conf}
+
+
+@torch.no_grad()
+def hierarchical_predict_map_truncate(fs_sigmoid, tree_loss_module, targets_per_level, level_order, global_index_ranges,
+                                      device, threshold, sentinel=-1):
+    """Main prediction pipeline."""
+    S = tree_loss_module.stateSpace_unweighted
+    marginals = tree_loss_module.compute_true_marginals(fs_sigmoid, device)
+    level_nodes_list = {lvl: list(range(*global_index_ranges[lvl])) for lvl in level_order}
+
+    map_out = map_decode_paths(fs_sigmoid, S, level_order, level_nodes_list)
+    map_paths = map_out["path_nodes_global"]
+
+    zero_mask = (S[map_out["best_state_idx"]].sum(dim=1) == 0)
+    if zero_mask.any():
+        fallback = per_level_marginal_argmax(marginals, level_order, level_nodes_list)
+        for lvl in level_order:
+            map_paths[lvl][zero_mask] = fallback[lvl][zero_mask]
+
+    map_trunc = map_truncate_with_threshold(marginals, map_paths, targets_per_level, level_order, global_index_ranges,
+                                            threshold, sentinel)
+    return {"marginals": marginals, "map_path_nodes_global": map_paths, **map_trunc}
+
+
 def compute_hierarchical_accuracy_with_inference(
         combined_output,
         pf4_targets, pf3_targets, pf2_targets, pf1_targets, leaf_targets,
-        tree_loss, device, config_module, counters, sentinel=-1, use_greedy=False
+        tree_loss, device, config_module, counters, sentinel=-1, **kwargs
 ):
-    """
-    Compute hierarchical accuracy using tree loss inference method.
-    Optimized:
-    - Static caching for hierarchy and level nodes
-    - Vectorized accuracy computation for non-greedy mode
-    """
+    """Refactored metrics entry point."""
+    level_order = ["pf4", "pf3", "pf2", "pf1", "leaf"]
+    targets_dict = {'pf4': pf4_targets, 'pf3': pf3_targets, 'pf2': pf2_targets, 'pf1': pf1_targets,
+                    'leaf': leaf_targets}
 
-    # --- Static cache for hierarchy and level nodes ---
-    if not hasattr(compute_hierarchical_accuracy_with_inference, "_cache"):
-        compute_hierarchical_accuracy_with_inference._cache = {
-            "hierarchy_structure": build_hierarchy_structure() if use_greedy else None,
-            "level_nodes": {
-                "pf4": range(*config.GLOBAL_INDEX_RANGES['pf4']),
-                "pf3": range(*config.GLOBAL_INDEX_RANGES['pf3']),
-                "pf2": range(*config.GLOBAL_INDEX_RANGES['pf2']),
-                "pf1": range(*config.GLOBAL_INDEX_RANGES['pf1']),
-                "leaf": range(*config.GLOBAL_INDEX_RANGES['leaf'])
-            },
-            "level_names": ["pf4", "pf3", "pf2", "pf1", "leaf"]
-        }
+    results = hierarchical_predict_map_truncate(
+        combined_output, tree_loss, targets_dict, level_order, config.GLOBAL_INDEX_RANGES,
+        device, config.HIER_CONF_THRESHOLD, sentinel
+    )
 
-    cache = compute_hierarchical_accuracy_with_inference._cache
-    hierarchy_structure = cache["hierarchy_structure"]
-    level_nodes = cache["level_nodes"]
-    level_names_const = cache["level_names"]
+    map_paths = results["map_path_nodes_global"]
+    for i, lvl in enumerate(level_order):
+        t = targets_dict[lvl].to(device)
+        valid = (t != sentinel)
+        if not valid.any(): continue
 
-    # Get marginal probabilities
-    pMargin = tree_loss.inference(combined_output, device)
-    pMargin_np = pMargin.cpu().numpy()
+        preds_global = map_paths[lvl]
 
-    # Convert targets to NumPy arrays
-    targets_np = [t.cpu().numpy() for t in [pf4_targets, pf3_targets, pf2_targets, pf1_targets, leaf_targets]]
+        # Robustly handle samples where the MAP path is shorter than the ground truth level
+        has_pred = (preds_global >= 0) & valid
+        if not has_pred.any(): continue
 
-    if use_greedy:
-        # Greedy mode: still sequential per sample
-        for i in range(pMargin_np.shape[0]):
-            # Build true path dynamically
-            true_path = []
-            level_names = []
-            for level_name, targets in zip(level_names_const, targets_np):
-                if targets[i] != sentinel:
-                    true_path.append(targets[i])
-                    level_names.append(level_name)
+        preds_local = preds_global[has_pred] - config.GLOBAL_INDEX_RANGES[lvl][0]
+        v_targets = t[has_pred].cpu().numpy()
+        v_preds = preds_local.cpu().numpy()
+        v_confs = combined_output[has_pred, preds_global[has_pred]].cpu().numpy()
 
-            if not true_path:
-                continue
+        counters[lvl]["total"] += len(v_targets)
+        counters[lvl]["trues"].extend(v_targets.tolist())
+        counters[lvl]["preds"].extend(v_preds.tolist())
+        counters[lvl]["confs"].extend(v_confs.tolist())
+        counters[lvl]["correct"] += np.sum(v_preds == v_targets)
 
-            # Predict path using greedy
-            pred_paths = greedy_top_down_prediction(pMargin_np[i:i + 1], hierarchy_structure)
-            pred_path = pred_paths[0]
+        # Related error tracking: predicted shared parent with true?
+        if i > 0:
+            parent_lvl = level_order[i - 1]
+            t_parent = targets_dict[parent_lvl].to(device)
+            # Sample must have valid target at both levels
+            mask = has_pred & (t_parent != sentinel) & (map_paths[parent_lvl] >= 0)
+            if mask.any():
+                incorrect = (map_paths[lvl][mask] != (t[mask] + config.GLOBAL_INDEX_RANGES[lvl][0]))
+                if incorrect.any():
+                    p_pred = map_paths[parent_lvl][mask][incorrect]
+                    p_true = t_parent[mask][incorrect] + config.GLOBAL_INDEX_RANGES[parent_lvl][0]
+                    related = (p_pred == p_true).cpu().numpy()
 
-            # Align predictions if greedy stops early
-            if len(pred_path) < len(level_names):
-                level_names = level_names[:len(pred_path)]
-                true_path = true_path[:len(pred_path)]
+                    if "related_hits" not in counters[lvl]:
+                        counters[lvl]["related_hits"] = []
 
-            # Update counters
-            for idx, level_name in enumerate(level_names):
-                counters[level_name]["total"] += 1
-                counters[level_name]["trues"].append(true_path[idx])
-                counters[level_name]["preds"].append(pred_path[idx])
-                if pred_path[idx] == true_path[idx]:
-                    counters[level_name]["correct"] += 1
-
-    else:
-        # Non-greedy mode: vectorized
-        for level_name, node_ids, targets in zip(level_names_const, level_nodes.values(), targets_np):
-            valid_mask = targets != sentinel
-            if not np.any(valid_mask):
-                continue
-
-            # Predict for all samples at this level
-            probs = pMargin_np[:, node_ids]  # [batch_size, num_nodes_in_level]
-            preds_global = np.argmax(probs, axis=1)
-            preds_global = np.array(node_ids)[preds_global]
-
-            # Convert to local IDs
-            offset = config.GLOBAL_INDEX_RANGES[level_name][0]
-            preds_local = preds_global - offset
-
-            # Update counters in bulk
-            counters[level_name]["total"] += valid_mask.sum()
-            counters[level_name]["trues"].extend(targets[valid_mask].tolist())
-            counters[level_name]["preds"].extend(preds_local[valid_mask].tolist())
-            counters[level_name]["correct"] += np.sum(preds_local[valid_mask] == targets[valid_mask])
+                    hits = list(zip(t[mask][incorrect].cpu().numpy().tolist(), related.tolist()))
+                    counters[lvl]["related_hits"].extend(hits)
 
     return counters
-
-
-
-# def compute_level_accuracy_with_softmax(logits, targets, total, correct, preds, trues, sentinel=-1):
-#     """
-#     Compute accuracy for a single hierarchy level using softmax predictions.
-#
-#     Args:
-#         logits: Raw logits output for this level [batch, num_classes]
-#         targets: Ground truth targets for this level
-#         total: Running total of samples
-#         correct: Running count of correct predictions
-#         preds: List to append predictions to
-#         trues: List to append ground truth to
-#         sentinel: Value indicating invalid targets
-#
-#     Returns:
-#         Tuple of (updated_total, updated_correct)
-#     """
-#     # Apply softmax to get probabilities
-#     probs = torch.softmax(logits, dim=1)
-#     predicted = torch.argmax(probs, dim=1)
-#
-#     valid_mask = targets != sentinel
-#
-#     if valid_mask.sum() > 0:
-#         selected_pred = predicted[valid_mask]
-#         selected_targets = targets[valid_mask]
-#
-#         total += selected_targets.size(0)
-#         correct += selected_pred.eq(selected_targets).cpu().sum().item()
-#
-#         preds.extend(selected_pred.cpu().numpy())
-#         trues.extend(selected_targets.cpu().numpy())
-#
-#     return total, correct
-
-# def compute_level_accuracy(sig_output, targets, total, correct, preds, trues, sentinel=-1):
-#     """
-#     Compute accuracy for a single hierarchy level.
-#
-#     Args:
-#         sig_output: Model sigmoid/softmax output for this level
-#         targets: Ground truth targets for this level
-#         total: Running total of samples
-#         correct: Running count of correct predictions
-#         preds: List to append predictions to
-#         trues: List to append ground truth to
-#         sentinel: Value indicating invalid targets
-#
-#     Returns:
-#         Tuple of (updated_total, updated_correct)
-#     """
-#     predicted = torch.argmax(sig_output.data, dim=1)
-#     valid_mask = targets != sentinel
-#
-#     if valid_mask.sum() > 0:
-#         selected_pred = predicted[valid_mask]
-#         selected_targets = targets[valid_mask]
-#
-#         total += selected_targets.size(0)
-#         correct += selected_pred.eq(selected_targets).cpu().sum().item()
-#
-#         preds.extend(selected_pred.cpu().numpy())
-#         trues.extend(selected_targets.cpu().numpy())
-#
-#     return total, correct
-#
-#
-# def compute_leaf_accuracy(leaf_soft, leaf_sig, leaf_targets, valid_mask, num_leaf_classes,
-#                          total, correct_soft, correct_sig, preds_soft, preds_sig, trues,
-#                          sentinel=-1, verbose=False):
-#     """
-#     Compute accuracy for leaf level with both softmax and sigmoid outputs.
-#
-#     Args:
-#         leaf_soft: Softmax output for leaf level
-#         leaf_sig: Sigmoid output for leaf level
-#         leaf_targets: Ground truth leaf targets
-#         valid_mask: Mask indicating valid samples
-#         num_leaf_classes: Number of leaf classes
-#         total: Running total of samples
-#         correct_soft: Running count of correct predictions (softmax)
-#         correct_sig: Running count of correct predictions (sigmoid)
-#         preds_soft: List to append softmax predictions to
-#         preds_sig: List to append sigmoid predictions to
-#         trues: List to append ground truth to
-#         sentinel: Value indicating invalid targets
-#         verbose: Whether to print debug info
-#
-#     Returns:
-#         Tuple of (updated_total, updated_correct_soft, updated_correct_sig)
-#     """
-#     if valid_mask.sum() > 0:
-#         selected_soft = leaf_soft[valid_mask]
-#         selected_sig = leaf_sig[valid_mask]
-#         selected_targets = leaf_targets[valid_mask]
-#
-#         # Validate target range
-#         if selected_targets.min() < 0 or selected_targets.max() >= num_leaf_classes:
-#             if verbose:
-#                 print(f"Warning: Invalid leaf target detected. "
-#                       f"Min: {selected_targets.min()}, Max: {selected_targets.max()}, "
-#                       f"Expected range: [0, {num_leaf_classes-1}]")
-#             return total, correct_soft, correct_sig
-#
-#         # Compute predictions
-#         pred_soft = torch.argmax(selected_soft.data, dim=1)
-#         pred_sig = torch.argmax(selected_sig.data, dim=1)
-#
-#         # Update counters
-#         total += selected_targets.size(0)
-#         correct_soft += pred_soft.eq(selected_targets).cpu().sum().item()
-#         correct_sig += pred_sig.eq(selected_targets).cpu().sum().item()
-#
-#         # Store predictions
-#         preds_soft.extend(pred_soft.cpu().numpy())
-#         preds_sig.extend(pred_sig.cpu().numpy())
-#         trues.extend(selected_targets.cpu().numpy())
-#     elif verbose:
-#         print("Info: No valid leaf targets in this batch.")
-#
-#     return total, correct_soft, correct_sig
-
 
 def compute_confusion_matrix(y_true, y_pred, num_classes=None):
     """
@@ -414,30 +372,3 @@ def compute_confusion_matrix(y_true, y_pred, num_classes=None):
 
     return confusion_matrix(y_true, y_pred, labels=all_classes)
 
-
-# def print_confusion_matrix(y_true, y_pred, level_name, label_map=None):
-#     """
-#     Print confusion matrix in readable format.
-#
-#     Args:
-#         y_true: Ground truth labels
-#         y_pred: Predicted labels
-#         level_name: Name of hierarchy level
-#         label_map: Optional mapping from indices to names
-#     """
-#     cm = compute_confusion_matrix(y_true, y_pred)
-#     unique_classes = sorted(set(y_true))
-#
-#     print(f"\nConfusion Matrix for {level_name}:")
-#     print("True\\Pred", end="")
-#     for cls in unique_classes:
-#         name = label_map.get(str(cls), str(cls))[:10] if label_map else str(cls)
-#         print(f"\t{name}", end="")
-#     print()
-#
-#     for i, cls_true in enumerate(unique_classes):
-#         name = label_map.get(str(cls_true), str(cls_true))[:10] if label_map else str(cls_true)
-#         print(f"{name}", end="")
-#         for j, cls_pred in enumerate(unique_classes):
-#             print(f"\t{cm[i, j]}", end="")
-#         print()

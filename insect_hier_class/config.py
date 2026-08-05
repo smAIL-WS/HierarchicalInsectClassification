@@ -19,9 +19,21 @@ MODELS_DIR = BASE_DIR / 'models_Insect'
 PRETRAINED_DIR = BASE_DIR.parent / 'pre-trained'
 
 # ============================================================================
+# DATASET LOCATION
+# ============================================================================
+# Root directory containing the insect image dataset.
+# Train/test list files contain paths relative to this directory.
+DATASET_ROOT = Path("/path/to/dataset/root")
+
+# ============================================================================
+# DATA SOURCES
+# ============================================================================
+DUCKDB_PATH = "/path/to/DuckDB/database"
+
+# ============================================================================
 # RUN CONFIGURATION (Main setting to change between runs)
 # ============================================================================
-RUN_DATE = '2025-12-21'  # CHANGE THIS for each new run
+RUN_DATE = '2026-01-19_portable'  # CHANGE THIS for each new run, matching folder created in /runs with train/val/test lists, hierarchy tree and label maps.
 RUN_FOLDER = RUNS_DIR / RUN_DATE
 
 # Logging controls for Hyperparameter optimization
@@ -51,33 +63,33 @@ PER_LEVEL_METRICS_CSV = 'per_level_metrics.csv'
 HIERARCHY = [
     [0],
     [1],
-    [0, 8],
-    [0, 5],
-    [0, 7],
     [0, 3],
+    [0, 5],
     [0, 6],
-    [0, 2, 17],
-    [0, 2, 14],
+    [0, 7],
+    [0, 8],
     [0, 3, 10],
-    [0, 5, 15],
-    [0, 2, 13],
-    [0, 2, 12],
     [0, 3, 11],
+    [0, 2, 12],
+    [0, 2, 13],
+    [0, 2, 14],
+    [0, 5, 15],
     [0, 4, 16],
-    [0, 4, 9, 22],
+    [0, 2, 17],
     [0, 3, 10, 20],
     [0, 3, 11, 21],
-    [0, 3, 10, 20, 27],
-    [0, 3, 10, 19, 24],
-    [0, 3, 10, 20, 26],
+    [0, 4, 9, 22],
     [0, 4, 9, 18, 23],
-    [0, 4, 9, 18, 33],
+    [0, 3, 10, 19, 24],
     [0, 3, 10, 20, 25],
+    [0, 3, 10, 20, 26],
+    [0, 3, 10, 20, 27],
+    [0, 3, 10, 20, 28],
+    [0, 3, 10, 20, 29],
     [0, 3, 10, 19, 30],
     [0, 3, 10, 20, 31],
-    [0, 3, 10, 20, 29],
-    [0, 3, 10, 20, 28],
     [0, 3, 10, 20, 32],
+    [0, 4, 9, 18, 33],
 ]
 
 # Computed from hierarchy
@@ -140,22 +152,22 @@ BACKBONE_CONFIGS = {
 
 # Model hyperparameters
 DROPOUT_RATE_CONV = 0.2
-DROPOUT_RATE_FC = 0.65
+DROPOUT_RATE_FC = 0.5
 FC_HIDDEN_DIM = 512
 
 # ============================================================================
 # TRAINING HYPERPARAMETERS
 # ============================================================================
-DEFAULT_BATCH_SIZE = 4096
+DEFAULT_BATCH_SIZE = 1024
 DEFAULT_NUM_EPOCHS = 100
 DEFAULT_NUM_WORKERS = 8
 DEFAULT_SEED = 42
 
 # Learning rates
-LR_CLASSIFIER = 0.002
-LR_BACKBONE = 0.0002
+LR_CLASSIFIER = 0.00075
+LR_BACKBONE = 0.00043
 MOMENTUM = 0.9
-WEIGHT_DECAY = 5e-4
+WEIGHT_DECAY = 1e-3
 
 # Learning rate scheduler
 LR_SCHEDULER_STEP_SIZE = 60
@@ -176,7 +188,7 @@ TREE_LOSS_ALPHA = 0.2
 
 TREE_LOSS_BETA = 0.999995  # For effective class weighting. Must be less than 1.
 
-HIERARCHY_WEIGHT = 3.0
+HIERARCHY_WEIGHT = 4.4
 
 # Cross-Entropy alpha schedule
 ALPHA_START = 1.2        # Initial CE alpha
@@ -196,20 +208,22 @@ FOCAL_LOSS_GAMMA = 1.0  # Focus on hard examples
 FOCAL_LOSS_ALPHA = 1.0  # Downweight easy negatives
 
 # Cross-entropy loss label smoothing
-LABEL_SMOOTHING = 0.05
+LABEL_SMOOTHING = 0.1
 
 # Sentinel value for invalid targets
 SENTINEL_VALUE = -1
 
-# ============================================================================
-# BI-DIRECTIONAL LEARNING RATE SCHEDULE
-# ============================================================================
-BIDIRECTIONAL_FEATURE_WEIGHTS = {
-    'pf4': 0.05,
-    'pf3': 0.1,
-    'pf2': 0.15,
-    'pf1': 0.2
-}
+HIER_CONF_THRESHOLD = 0.4
+
+# # ============================================================================
+# # BI-DIRECTIONAL LEARNING RATE SCHEDULE
+# # ============================================================================
+# BIDIRECTIONAL_FEATURE_WEIGHTS = {
+#     'pf4': 0.05,
+#     'pf3': 0.1,
+#     'pf2': 0.15,
+#     'pf1': 0.2
+# }
 
 
 # ============================================================================
@@ -219,7 +233,7 @@ BIDIRECTIONAL_FEATURE_WEIGHTS = {
 TRAIN_AUGMENTATION = {
     # Geometric base
     'horizontal_flip': True,
-    'vertical_flip': True,              # newly added
+    'vertical_flip': True,
     'rotation_degrees': 15,
     'affine_translate': (0.1, 0.1),     # fractions of (width, height)
     'affine_zoom_max': 1.2,             # zoom-in upper bound for RandomAffine scale=(1.0, affine_zoom_max)
@@ -235,6 +249,10 @@ TRAIN_AUGMENTATION = {
     'gaussian_blur_prob': 0.05,         # very low probability
     'gaussian_kernel_size': 3,          # must be odd (e.g., 3 or 5)
 
+    # Random Erasing to combat background overfitting
+    'random_erasing_prob': 0.5,         # 50% chance to erase a patch
+    'random_erasing_scale': (0.02, 0.15), # size of the patch (2% to 15% of image)
+
     # Normalization
     'normalize_mean': (0.445995, 0.435061, 0.403322),   # dataset-specific mean values
     'normalize_std': (0.229014, 0.238985, 0.23883),     # dataset-specific std values
@@ -242,6 +260,7 @@ TRAIN_AUGMENTATION = {
     # Implementation details / defaults
     'rotation_fill_value': (114, 111, 103),         # dataset-specific mean color
     'affine_fill_value': (114, 111, 103),           # dataset-specific mean color
+    'random_erasing_fill_value': (114, 111, 103),   # dataset-specific mean color
 }
 
 # Test augmentation parameters

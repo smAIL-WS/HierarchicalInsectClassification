@@ -5,11 +5,13 @@ Includes per-epoch evaluation and metric logging.
 from torch.amp import autocast
 from torch.cuda.amp import GradScaler
 import torch
+import torch.nn.functional as F
 import time
 import os
 import random
 import numpy as np
 import optuna
+from sklearn.metrics import matthews_corrcoef
 from torch import GradScaler
 
 import config
@@ -124,7 +126,7 @@ def train(epoches, net, trainloader, testloader, optimizer, scheduler, lr_adjt,
     max_val_acc = 0
     best_epoch = 0
     # Will hold the final epoch's validation loss (objective for Optuna).
-    last_test_loss = None
+    last_mcc_tuple = None
 
     # Multi-GPU setup
     if len(devices) > 1:
@@ -139,9 +141,13 @@ def train(epoches, net, trainloader, testloader, optimizer, scheduler, lr_adjt,
     print("="*70)
     
     # initial_image_size = config.PROGRESSIVE_RESIZE_SCHEDULE['initial']
-    (initial_pf4_acc, initial_pf3_acc, initial_pf2_acc, initial_pf1_acc,
-     initial_leaf_acc, initial_test_loss, initial_tree_loss, initial_ce_loss, # initial_entropy_loss,
-     _) = test(net, testloader, tree_loss, device, dataset, trainset, trees,
+    (
+        initial_pf4_acc, initial_pf3_acc, initial_pf2_acc, initial_pf1_acc,
+        initial_leaf_acc, initial_test_loss, initial_tree_loss, initial_ce_loss,
+        _, # ignore level_metrics_dict
+        _, # ignore initial MCC tuple
+        _  # ignore initial confidence dict
+    ) = test(net, testloader, tree_loss, device, dataset, trainset, trees,
                get_test_transform, eval_image_size, run_folder)
     
     print(f"  PF4: {initial_pf4_acc:.2f}%")
@@ -199,11 +205,11 @@ def train(epoches, net, trainloader, testloader, optimizer, scheduler, lr_adjt,
         # leaf_preds, leaf_trues = [], []
 
         counters = {
-            "pf4": {"total": 0, "correct": 0, "preds": [], "trues": []},
-            "pf3": {"total": 0, "correct": 0, "preds": [], "trues": []},
-            "pf2": {"total": 0, "correct": 0, "preds": [], "trues": []},
-            "pf1": {"total": 0, "correct": 0, "preds": [], "trues": []},
-            "leaf": {"total": 0, "correct": 0, "preds": [], "trues": []},
+            "pf4": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
+            "pf3": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
+            "pf2": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
+            "pf1": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
+            "leaf": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
         }
         
         # Adjust learning rate
@@ -368,27 +374,6 @@ def train(epoches, net, trainloader, testloader, optimizer, scheduler, lr_adjt,
                 print(f"  Learning rate: {optimizer.param_groups[0]['lr']}")
                 raise ValueError("NaN/Inf loss detected - stopping training")
 
-            # # Compute accuracies
-            # with torch.no_grad():
-            #     pf4_total, pf4_correct = compute_level_accuracy_with_softmax(
-            #         pf4_logits, pf4_targets, pf4_total, pf4_correct, pf4_preds, pf4_trues
-            #     )
-            #
-            #     pf3_total, pf3_correct = compute_level_accuracy_with_softmax(
-            #         pf3_logits, pf3_targets, pf3_total, pf3_correct, pf3_preds, pf3_trues
-            #     )
-            #
-            #     pf2_total, pf2_correct = compute_level_accuracy_with_softmax(
-            #         pf2_logits, pf2_targets, pf2_total, pf2_correct, pf2_preds, pf2_trues
-            #     )
-            #
-            #     pf1_total, pf1_correct = compute_level_accuracy_with_softmax(
-            #         pf1_logits, pf1_targets, pf1_total, pf1_correct, pf1_preds, pf1_trues
-            #     )
-            #
-            #     leaf_total, leaf_correct = compute_level_accuracy_with_softmax(
-            #         leaf_logits, leaf_targets, leaf_total, leaf_correct, leaf_preds, leaf_trues
-            #     )
 
             with torch.no_grad():
                 counters = compute_hierarchical_accuracy_with_inference(
@@ -397,10 +382,6 @@ def train(epoches, net, trainloader, testloader, optimizer, scheduler, lr_adjt,
                     tree_loss, device, config, counters, use_greedy=use_greedy_inference
                 )
 
-            # # Stop after first batch
-            # if batch_idx == 0:
-            #     print("Stopping after first batch for debugging.")
-            #     break
 
         # Step scheduler if using Step LR
         if lr_adjt == 'Step':
@@ -428,48 +409,21 @@ def train(epoches, net, trainloader, testloader, optimizer, scheduler, lr_adjt,
         pf1_trues_filt, pf1_preds_filt = filter_invalid(pf1_trues, pf1_preds)
         leaf_trues_filt, leaf_preds_filt = filter_invalid(leaf_trues, leaf_preds)
 
-        # # start debugging
-        # # Filter invalid predictions
-        # pf4_trues_filt, pf4_preds_filt = filter_invalid(pf4_trues, pf4_preds)
-        # print(f"PF4 filtered trues (len={len(pf4_trues_filt)}): {pf4_trues_filt[:10]}")
-        # print(f"PF4 filtered preds (len={len(pf4_preds_filt)}): {pf4_preds_filt[:10]}")
-        #
-        # pf3_trues_filt, pf3_preds_filt = filter_invalid(pf3_trues, pf3_preds)
-        # print(f"PF3 filtered trues (len={len(pf3_trues_filt)}): {pf3_trues_filt[:10]}")
-        # print(f"PF3 filtered preds (len={len(pf3_preds_filt)}): {pf3_preds_filt[:10]}")
-        #
-        # pf2_trues_filt, pf2_preds_filt = filter_invalid(pf2_trues, pf2_preds)
-        # print(f"PF2 filtered trues (len={len(pf2_trues_filt)}): {pf2_trues_filt[:10]}")
-        # print(f"PF2 filtered preds (len={len(pf2_preds_filt)}): {pf2_preds_filt[:10]}")
-        #
-        # pf1_trues_filt, pf1_preds_filt = filter_invalid(pf1_trues, pf1_preds)
-        # print(f"PF1 filtered trues (len={len(pf1_trues_filt)}): {pf1_trues_filt[:10]}")
-        # print(f"PF1 filtered preds (len={len(pf1_preds_filt)}): {pf1_preds_filt[:10]}")
-        #
-        # leaf_trues_filt_soft, leaf_preds_filt_soft = filter_invalid(leaf_trues, leaf_preds_soft)
-        # print(f"Leaf soft filtered trues (len={len(leaf_trues_filt_soft)}): {leaf_trues_filt_soft[:10]}")
-        # print(f"Leaf soft filtered preds (len={len(leaf_preds_filt_soft)}): {leaf_preds_filt_soft[:10]}")
-        #
-        # leaf_trues_filt_sig, leaf_preds_filt_sig = filter_invalid(leaf_trues, leaf_preds_sig)
-        # print(f"Leaf sig filtered trues (len={len(leaf_trues_filt_sig)}): {leaf_trues_filt_sig[:10]}")
-        # print(f"Leaf sig filtered preds (len={len(leaf_preds_filt_sig)}): {leaf_preds_filt_sig[:10]}")
-        # # end debugging
-
-        # Print per-class metrics
-        print("\n--- Training Per-Class Metrics ---")
-        print_per_class_metrics(pf4_trues_filt, pf4_preds_filt, "PF4", label_maps['parent_folder_4'])
-        print_per_class_metrics(pf3_trues_filt, pf3_preds_filt, "PF3", label_maps['parent_folder_3'])
-        print_per_class_metrics(pf2_trues_filt, pf2_preds_filt, "PF2", label_maps['parent_folder_2'])
-        print_per_class_metrics(pf1_trues_filt, pf1_preds_filt, "PF1", label_maps['parent_folder_1'])
-        print_per_class_metrics(leaf_trues_filt, leaf_preds_filt, "Leaf", label_maps['classification'])
+        # # Print per-class metrics to console
+        # print("\n--- Training Per-Class Metrics ---")
+        # print_per_class_metrics(pf4_trues_filt, pf4_preds_filt, "PF4", label_maps['parent_folder_4'], counters["pf4"].get("related_hits"))
+        # print_per_class_metrics(pf3_trues_filt, pf3_preds_filt, "PF3", label_maps['parent_folder_3'], counters["pf3"].get("related_hits"))
+        # print_per_class_metrics(pf2_trues_filt, pf2_preds_filt, "PF2", label_maps['parent_folder_2'], counters["pf2"].get("related_hits"))
+        # print_per_class_metrics(pf1_trues_filt, pf1_preds_filt, "PF1", label_maps['parent_folder_1'], counters["pf1"].get("related_hits"))
+        # print_per_class_metrics(leaf_trues_filt, leaf_preds_filt, "Leaf", label_maps['classification'], counters["leaf"].get("related_hits"))
         
-        # Print aggregate metrics
-        print("\n--- Training Aggregate Metrics ---")
-        compute_metrics(pf4_trues_filt, pf4_preds_filt, "PF4")
-        compute_metrics(pf3_trues_filt, pf3_preds_filt, "PF3")
-        compute_metrics(pf2_trues_filt, pf2_preds_filt, "PF2")
-        compute_metrics(pf1_trues_filt, pf1_preds_filt, "PF1")
-        compute_metrics(leaf_trues_filt, leaf_preds_filt, "Leaf")
+        # # Print aggregate metrics to console
+        # print("\n--- Training Aggregate Metrics ---")
+        # compute_metrics(pf4_trues_filt, pf4_preds_filt, "PF4", counters["pf4"].get("related_hits"))
+        # compute_metrics(pf3_trues_filt, pf3_preds_filt, "PF3", counters["pf3"].get("related_hits"))
+        # compute_metrics(pf2_trues_filt, pf2_preds_filt, "PF2", counters["pf2"].get("related_hits"))
+        # compute_metrics(pf1_trues_filt, pf1_preds_filt, "PF1", counters["pf1"].get("related_hits"))
+        # compute_metrics(leaf_trues_filt, leaf_preds_filt, "Leaf", counters["leaf"].get("related_hits"))
         
         # Compute accuracy percentages
         train_pf4_acc = 100. * pf4_correct / pf4_total if pf4_total > 0 else 0.0
@@ -505,104 +459,140 @@ def train(epoches, net, trainloader, testloader, optimizer, scheduler, lr_adjt,
             "Leaf": (leaf_trues_filt, leaf_preds_filt)
         }
 
-        if getattr(config, "LOG_PER_CLASS", True):
-            log_per_class_metrics(
-                epoch=epoch,
-                level_metrics_dict=level_metrics_dict,
-                label_maps={
-                    "PF4": label_maps['parent_folder_4'],
-                    "PF3": label_maps['parent_folder_3'],
-                    "PF2": label_maps['parent_folder_2'],
-                    "PF1": label_maps['parent_folder_1'],
-                    "Leaf": label_maps['classification']
-                },
-                split="Train",
-                run_folder=out_dir
-            )
+        # Pack training confidences
+        level_confidences_train = {
+            "PF4": counters["pf4"]["confs"],
+            "PF3": counters["pf3"]["confs"],
+            "PF2": counters["pf2"]["confs"],
+            "PF1": counters["pf1"]["confs"],
+            "Leaf": counters["leaf"]["confs"]
+        }
+
+        # Prepare relatedness info mapping
+        rel_data = {lvl.upper(): counters[lvl.lower()].get("related_hits", [])
+                    for lvl in ["PF4", "PF3", "PF2", "PF1", "Leaf"]}
+
+        # # Log detailed per-class metrics for monitoring during training.
+        # # For actual evaluation metrics use analysis_metrics.py
+        # if getattr(config, "LOG_PER_CLASS", True):
+        #     log_per_class_metrics(
+        #         epoch=epoch,
+        #         level_metrics_dict=level_metrics_dict,
+        #         label_maps={
+        #             "PF4": label_maps['parent_folder_4'],
+        #             "PF3": label_maps['parent_folder_3'],
+        #             "PF2": label_maps['parent_folder_2'],
+        #             "PF1": label_maps['parent_folder_1'],
+        #             "Leaf": label_maps['classification']
+        #         },
+        #         split="Train",
+        #         run_folder=out_dir,
+        #         level_confidences=level_confidences_train,
+        #         related_info=rel_data
+        #     )
 
         if getattr(config, "LOG_PER_LEVEL", True):
             log_per_level_metrics(
                 epoch=epoch,
                 level_metrics_dict=level_metrics_dict,
                 split="Train",
-                run_folder=out_dir
+                run_folder=out_dir,
+                related_info=rel_data
             )
 
-        if getattr(config, "LOG_CONFUSION", True):
-            log_confusion_matrices_to_pdf(
-                epoch=epoch,
-                level_metrics_dict=level_metrics_dict,
-                label_maps={
-                    "PF4": label_maps['parent_folder_4'],
-                    "PF3": label_maps['parent_folder_3'],
-                    "PF2": label_maps['parent_folder_2'],
-                    "PF1": label_maps['parent_folder_1'],
-                    "Leaf": label_maps['classification']
-                },
-                split="Train",
-                run_folder=out_dir
-            )
+        # # Logs confusion matrices per level and epoch.
+        # # It is preferable to just produce final confusion matrix with analysis_metrics.py module.
+        # if getattr(config, "LOG_CONFUSION", True):
+        #     log_confusion_matrices_to_pdf(
+        #         epoch=epoch,
+        #         level_metrics_dict=level_metrics_dict,
+        #         label_maps={
+        #             "PF4": label_maps['parent_folder_4'],
+        #             "PF3": label_maps['parent_folder_3'],
+        #             "PF2": label_maps['parent_folder_2'],
+        #             "PF1": label_maps['parent_folder_1'],
+        #             "Leaf": label_maps['classification']
+        #         },
+        #         split="Train",
+        #         run_folder=out_dir
+        #     )
 
         # Test evaluation (Always at final image size)
         print(f"[Epoch {epoch}] Evaluating at fixed eval image size {eval_image_size}")
 
+        # Lightweight validation during training.
+        # This evaluation is used for checkpoint selection and HPO monitoring.
+        # Publication-quality metrics should be generated by analysis_metrics.py
+        # using a saved model checkpoint.
         (test_pf4_acc, test_pf3_acc, test_pf2_acc, test_pf1_acc,
          test_leaf_acc, test_loss, test_tree_loss_avg, test_ce_loss_avg, # test_entropy_loss_avg,
-         level_metrics_dict_test) = test(
+         level_metrics_dict_test, mcc_tuple, level_confidences_test) = test(
             net, testloader, tree_loss, device, dataset, trainset, trees,
             get_test_transform, eval_image_size, run_folder, use_greedy_inference=use_greedy_inference
         )
 
         # ---------------- Optuna reporting & pruning ----------------
+        # NEW: per-epoch composite for pruning/plotting
+        mcc_pf4, mcc_pf3, mcc_pf2, mcc_pf1, mcc_leaf = mcc_tuple
+        mean_mcc = float(np.mean(mcc_tuple))
+        last_mcc_tuple = mcc_tuple  # keep the final epoch's 5 MCCs for return
+
         # Keep the last epoch's val loss as the scalar objective to return.
         last_test_loss = test_loss
         # If Optuna trial provided, report the current epoch's val loss.
-        if trial is not None:
-            # Report intermediate value: pruners consume these to decide early stopping.
-            trial.report(test_loss, step=epoch)
-            # Check if Optuna suggests pruning this trial at this step.
-            if trial.should_prune():
-                # Raise Optuna's pruning exception to stop this trial early.
-                raise optuna.TrialPruned()
-            # ----------------------------------------------------------------------
+        # if trial is not None:
+        #     # Report intermediate value: pruners consume these to decide early stopping.
+        #     trial.report(mean_mcc, step=epoch)
+        #     # Check if Optuna suggests pruning this trial at this step.
+        #     if trial.should_prune():
+        #         # Raise Optuna's pruning exception to stop this trial early.
+        #         raise optuna.TrialPruned()
+        #     # ----------------------------------------------------------------------
 
-        if getattr(config, "LOG_PER_CLASS", True):
-            log_per_class_metrics(
-                epoch=epoch,
-                level_metrics_dict=level_metrics_dict_test,
-                label_maps={
-                    "PF4": label_maps['parent_folder_4'],
-                    "PF3": label_maps['parent_folder_3'],
-                    "PF2": label_maps['parent_folder_2'],
-                    "PF1": label_maps['parent_folder_1'],
-                    "Leaf": label_maps['classification']
-                },
-                split="Test",
-                run_folder=out_dir
-            )
+        # # Log detailed per-class metrics for monitoring during training.
+        # # For actual evaluation metrics use analysis_metrics.py
+        # if getattr(config, "LOG_PER_CLASS", True):
+        #     log_per_class_metrics(
+        #         epoch=epoch,
+        #         level_metrics_dict=level_metrics_dict_test,
+        #         label_maps={
+        #             "PF4": label_maps['parent_folder_4'],
+        #             "PF3": label_maps['parent_folder_3'],
+        #             "PF2": label_maps['parent_folder_2'],
+        #             "PF1": label_maps['parent_folder_1'],
+        #             "Leaf": label_maps['classification'],
+        #         },
+        #         split="Test",
+        #         run_folder=out_dir,
+        #         level_confidences=level_confidences_test,
+        #         related_info=rel_data
+        #     )
 
         if getattr(config, "LOG_PER_LEVEL", True):
             log_per_level_metrics(
                 epoch=epoch,
                 level_metrics_dict=level_metrics_dict_test,
                 split="Test",
-                run_folder=out_dir
+                run_folder=out_dir,
+                related_info=rel_data
             )
 
-        if getattr(config, "LOG_CONFUSION", True):
-            log_confusion_matrices_to_pdf(
-                epoch=epoch,
-                level_metrics_dict=level_metrics_dict_test,
-                label_maps={
-                    "PF4": label_maps['parent_folder_4'],
-                    "PF3": label_maps['parent_folder_3'],
-                    "PF2": label_maps['parent_folder_2'],
-                    "PF1": label_maps['parent_folder_1'],
-                    "Leaf": label_maps['classification']
-                },
-                split="Test",
-                run_folder=out_dir
-            )
+        # # Logs confusion matrices per level and epoch.
+        # # It is preferable to just produce final confusion matrix with analysis_metrics.py module.
+        # if getattr(config, "LOG_CONFUSION", True):
+        #     log_confusion_matrices_to_pdf(
+        #         epoch=epoch,
+        #         level_metrics_dict=level_metrics_dict_test,
+        #         label_maps={
+        #             "PF4": label_maps['parent_folder_4'],
+        #             "PF3": label_maps['parent_folder_3'],
+        #             "PF2": label_maps['parent_folder_2'],
+        #             "PF1": label_maps['parent_folder_1'],
+        #             "Leaf": label_maps['classification']
+        #         },
+        #         split="Test",
+        #         run_folder=out_dir
+        #     )
 
         # Save epoch summary
 
@@ -637,7 +627,7 @@ def train(epoches, net, trainloader, testloader, optimizer, scheduler, lr_adjt,
             save_dir = config.MODELS_DIR
             save_dir.mkdir(exist_ok=True)
             save_path = save_dir / f'model_{save_name}.pth'
-            # torch.save(net, save_path)
+            torch.save(net, save_path)
             print(f'\n✓ New best model saved: {save_path}')
             net.to(device)
     
@@ -649,7 +639,8 @@ def train(epoches, net, trainloader, testloader, optimizer, scheduler, lr_adjt,
     print(f'{"="*70}\n')
 
     # Return final epoch's validation loss (objective for Optuna).
-    return float(last_test_loss) if last_test_loss is not None else float("inf")
+    return tuple(map(float, last_mcc_tuple)) if 'last_mcc_tuple' in locals() else (0.0, 0.0, 0.0, 0.0, 0.0)
+    # return float(last_test_loss) if last_test_loss is not None else float("inf")
 
 
 def test(net, testloader, tree_loss, device, dataset, trainset, trees, 
@@ -694,11 +685,11 @@ def test(net, testloader, tree_loss, device, dataset, trainset, trees,
     # leaf_preds, leaf_trues = [], []
 
     counters = {
-        "pf4": {"total": 0, "correct": 0, "preds": [], "trues": []},
-        "pf3": {"total": 0, "correct": 0, "preds": [], "trues": []},
-        "pf2": {"total": 0, "correct": 0, "preds": [], "trues": []},
-        "pf1": {"total": 0, "correct": 0, "preds": [], "trues": []},
-        "leaf": {"total": 0, "correct": 0, "preds": [], "trues": []},
+        "pf4": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
+        "pf3": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
+        "pf2": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
+        "pf1": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
+        "leaf": {"total": 0, "correct": 0, "preds": [], "trues": [], "confs": []},
     }
     
     with torch.no_grad():
@@ -728,6 +719,21 @@ def test(net, testloader, tree_loss, device, dataset, trainset, trees,
             pf4_logits, pf3_logits, pf2_logits, pf1_logits, leaf_logits = net(
                 inputs, masks_dict=masks_dict
             )
+
+            # # Calculate and store masked confidences
+            # confs_dict = {
+            #     "pf4": F.softmax(pf4_logits, dim=1).max(dim=1)[0],
+            #     "pf3": F.softmax(pf3_logits, dim=1).max(dim=1)[0],
+            #     "pf2": F.softmax(pf2_logits, dim=1).max(dim=1)[0],
+            #     "pf1": F.softmax(pf1_logits, dim=1).max(dim=1)[0],
+            #     "leaf": F.softmax(leaf_logits, dim=1).max(dim=1)[0]
+            # }
+            #
+            # for lvl in ["pf4", "pf3", "pf2", "pf1", "leaf"]:
+            #     m = masks_dict.get(lvl)
+            #     if m is not None and m.any():
+            #         valid_confs = confs_dict[lvl][m].cpu().tolist()
+            #         counters[lvl]["confs"].extend(valid_confs)
 
             # Apply sigmoid for tree loss and accuracy
             pf4_sig = torch.sigmoid(pf4_logits)
@@ -767,40 +773,12 @@ def test(net, testloader, tree_loss, device, dataset, trainset, trees,
                 label_smoothing=getattr(config, 'LABEL_SMOOTHING', 1.0)
             )
 
-            # # Compute entropy for test set too
-            # entropy_pf4 = compute_batch_entropy(pf4_sig)
-            # entropy_pf3 = compute_batch_entropy(pf3_sig)
-            # entropy_pf2 = compute_batch_entropy(pf2_sig)
-            # entropy_pf1 = compute_batch_entropy(pf1_sig)
-            # entropy_leaf = compute_batch_entropy(leaf_class_sig)
-            # entropy_loss = entropy_pf4 + entropy_pf3 + entropy_pf2 + entropy_pf1 + entropy_leaf
-            # lamda_entropy = config.LAMBDA_ENTROPY_TARGET
-
             loss = config.TREE_LOSS_TARGET * tree_loss_val + hierarchical_ce_loss # + lamda_entropy * entropy_loss
 
             test_loss += loss.item()
             test_tree_loss_sum += tree_loss_val.item()
             test_ce_loss_sum += hierarchical_ce_loss.item()
-            # test_entropy_loss_sum += entropy_loss.item()
 
-            # # Compute accuracies using softmax
-            # from hierarchical_classification_metrics import compute_level_accuracy_with_softmax
-            #
-            # pf4_total, pf4_correct = compute_level_accuracy_with_softmax(
-            #     pf4_logits, pf4_targets, pf4_total, pf4_correct, pf4_preds, pf4_trues
-            # )
-            # pf3_total, pf3_correct = compute_level_accuracy_with_softmax(
-            #     pf3_logits, pf3_targets, pf3_total, pf3_correct, pf3_preds, pf3_trues
-            # )
-            # pf2_total, pf2_correct = compute_level_accuracy_with_softmax(
-            #     pf2_logits, pf2_targets, pf2_total, pf2_correct, pf2_preds, pf2_trues
-            # )
-            # pf1_total, pf1_correct = compute_level_accuracy_with_softmax(
-            #     pf1_logits, pf1_targets, pf1_total, pf1_correct, pf1_preds, pf1_trues
-            # )
-            # leaf_total, leaf_correct = compute_level_accuracy_with_softmax(
-            #     leaf_logits, leaf_targets, leaf_total, leaf_correct, leaf_preds, leaf_trues
-            # )
 
             with torch.no_grad():
                 counters = compute_hierarchical_accuracy_with_inference(
@@ -854,23 +832,37 @@ def test(net, testloader, tree_loss, device, dataset, trainset, trees,
     pf2_trues_filt, pf2_preds_filt = filter_invalid(pf2_trues, pf2_preds)
     pf1_trues_filt, pf1_preds_filt = filter_invalid(pf1_trues, pf1_preds)
     leaf_trues_filt, leaf_preds_filt = filter_invalid(leaf_trues, leaf_preds)
-    
-    # Print detailed metrics
-    print("\n--- Test Per-Class Metrics ---")
-    print_per_class_metrics(pf4_trues_filt, pf4_preds_filt, "PF4", label_maps['parent_folder_4'])
-    print_per_class_metrics(pf3_trues_filt, pf3_preds_filt, "PF3", label_maps['parent_folder_3'])
-    print_per_class_metrics(pf2_trues_filt, pf2_preds_filt, "PF2", label_maps['parent_folder_2'])
-    print_per_class_metrics(pf1_trues_filt, pf1_preds_filt, "PF1", label_maps['parent_folder_1'])
-    print_per_class_metrics(leaf_trues_filt, leaf_preds_filt, "Leaf", label_maps['classification'])
 
-    
-    print("\n--- Test Aggregate Metrics ---")
-    compute_metrics(pf4_trues_filt, pf4_preds_filt, "PF4")
-    compute_metrics(pf3_trues_filt, pf3_preds_filt, "PF3")
-    compute_metrics(pf2_trues_filt, pf2_preds_filt, "PF2")
-    compute_metrics(pf1_trues_filt, pf1_preds_filt, "PF1")
-    compute_metrics(leaf_trues_filt, leaf_preds_filt, "Leaf")
-    
+    # For Optuna: Compute MCC per level (multi-class, global)
+    # NOTE:
+    # These MCC values are used for training monitoring and hyperparameter
+    # optimisation only. Final paper metrics are generated using the
+    # standalone analysis_metrics.py evaluation pipeline, which includes
+    # confidence-thresholded hierarchical backoff inference and additional
+    # analysis of shallow and rejected predictions.
+    mcc_pf4 = matthews_corrcoef(pf4_trues_filt, pf4_preds_filt) if len(pf4_trues_filt) > 0 else 0.0
+    mcc_pf3 = matthews_corrcoef(pf3_trues_filt, pf3_preds_filt) if len(pf3_trues_filt) > 0 else 0.0
+    mcc_pf2 = matthews_corrcoef(pf2_trues_filt, pf2_preds_filt) if len(pf2_trues_filt) > 0 else 0.0
+    mcc_pf1 = matthews_corrcoef(pf1_trues_filt, pf1_preds_filt) if len(pf1_trues_filt) > 0 else 0.0
+    mcc_leaf = matthews_corrcoef(leaf_trues_filt, leaf_preds_filt) if len(leaf_trues_filt) > 0 else 0.0
+
+    # # Print detailed metrics to console
+    # print("\n--- Test Per-Class Metrics ---")
+    # print_per_class_metrics(pf4_trues_filt, pf4_preds_filt, "PF4", label_maps['parent_folder_4'], counters["pf4"].get("related_hits"))
+    # print_per_class_metrics(pf3_trues_filt, pf3_preds_filt, "PF3", label_maps['parent_folder_3'], counters["pf3"].get("related_hits"))
+    # print_per_class_metrics(pf2_trues_filt, pf2_preds_filt, "PF2", label_maps['parent_folder_2'], counters["pf2"].get("related_hits"))
+    # print_per_class_metrics(pf1_trues_filt, pf1_preds_filt, "PF1", label_maps['parent_folder_1'], counters["pf1"].get("related_hits"))
+    # print_per_class_metrics(leaf_trues_filt, leaf_preds_filt, "Leaf", label_maps['classification'], counters["leaf"].get("related_hits"))
+
+    # # Print aggregate metrics to console
+    # print("\n--- Test Aggregate Metrics ---")
+    # compute_metrics(pf4_trues_filt, pf4_preds_filt, "PF4", counters["pf4"].get("related_hits"))
+    # compute_metrics(pf3_trues_filt, pf3_preds_filt, "PF3", counters["pf3"].get("related_hits"))
+    # compute_metrics(pf2_trues_filt, pf2_preds_filt, "PF2", counters["pf2"].get("related_hits"))
+    # compute_metrics(pf1_trues_filt, pf1_preds_filt, "PF1", counters["pf1"].get("related_hits"))
+    # compute_metrics(leaf_trues_filt, leaf_preds_filt, "Leaf", counters["leaf"].get("related_hits"))
+
+
     level_metrics_dict = {
         "PF4": (pf4_trues_filt, pf4_preds_filt),
         "PF3": (pf3_trues_filt, pf3_preds_filt),
@@ -878,7 +870,16 @@ def test(net, testloader, tree_loss, device, dataset, trainset, trees,
         "PF1": (pf1_trues_filt, pf1_preds_filt),
         "Leaf": (leaf_trues_filt, leaf_preds_filt)
     }
-    
+
+    # Pack confidences into a dict for logging
+    level_confidences = {
+        "PF4": counters["pf4"]["confs"],
+        "PF3": counters["pf3"]["confs"],
+        "PF2": counters["pf2"]["confs"],
+        "PF1": counters["pf1"]["confs"],
+        "Leaf": counters["leaf"]["confs"]
+    }
+
     return (test_pf4_acc, test_pf3_acc, test_pf2_acc, test_pf1_acc,
             test_leaf_acc, test_loss, test_tree_loss_avg, test_ce_loss_avg, # test_entropy_loss_avg,
-            level_metrics_dict)
+            level_metrics_dict, (mcc_pf4, mcc_pf3, mcc_pf2, mcc_pf1, mcc_leaf), level_confidences)

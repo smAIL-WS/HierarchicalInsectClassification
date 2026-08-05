@@ -9,10 +9,33 @@ venv/
 .idea/
 
 # Data and Runs
+insect_hier_class/runs/
 runs/
-*.pth
-*.json
-*.txt
+
+!README.md
 !requirements.txt
+!environment.txt
 
 pipreqs_wrapper.py
+
+/insect_hier_class/3d_plot.py
+/insect_hier_class/analysis_confidence.py
+/insect_hier_class/analysis_confidence_2.py
+/insect_hier_class/create_public_duckdb.py
+/insect_hier_class/inspectDB.py
+/insect_hier_class/portable_split_files.py
+/insect_hier_class/analysis/
+
+# models
+/insect_hier_class/models_Insect
+
+# evaluation visualisations
+/visualisations/figures/
+/visualisations/plot_thresholds.py
+
+# evaluation outputs
+/analysis
+/analysis_paper
+
+*.xlsx
+*.pdf

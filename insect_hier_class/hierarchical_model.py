@@ -160,6 +160,74 @@ def create_classifier(input_dim, num_classes, use_sigmoid=True):
     # This allows dual use for both BCE and CrossEntropy losses
     return nn.Linear(input_dim, num_classes)
 
+def hierarchical_conditional_dropout(
+    heads,
+    keep_probs,
+    training: bool,
+    inverted_scaling: bool = True
+):
+    """
+    Apply conditional hierarchical dropout (Rule A) to hierarchy heads.
+
+    Rule A:
+      - A parent level may be dropped only if at least one descendant remains active.
+      - At least one level is always active (leaf is preferred if needed).
+
+    Args:
+        heads: list of tensors
+            [x_pf4, x_pf3, x_pf2, x_pf1, x_leaf], ordered coarse → fine
+            Each tensor has shape [B, D] or compatible.
+        keep_probs: list of float
+            Keep probability per level, same order as heads.
+            Example: [0.7, 0.75, 0.8, 0.85, 0.92]
+        training: bool
+            Whether model is in training mode.
+        inverted_scaling: bool
+            If True, scale active heads by 1 / keep_prob.
+
+    Returns:
+        masked_heads: list of tensors
+            Heads after applying conditional dropout.
+        mask: torch.Tensor of shape [num_levels]
+            0/1 mask applied to each level.
+    """
+
+    assert len(heads) == len(keep_probs)
+    num_levels = len(heads)
+
+    # No dropout at eval
+    if not training:
+        mask = torch.ones(num_levels, device=heads[0].device)
+        return heads, mask
+
+    device = heads[0].device
+
+    # Sample independent Bernoulli mask (per-batch)
+    probs = torch.tensor(keep_probs, device=device)
+    mask = torch.bernoulli(probs)
+
+    # ---- Rule A enforcement (full ancestry) ----
+    # For any dropped parent i, at least one j > i must remain active
+    for i in range(num_levels - 1):
+        if mask[i] == 0:
+            if mask[i + 1 :].sum() == 0:
+                # Force the next deeper level to be active
+                mask[i + 1] = 1.0
+
+    # ---- Failsafe: ensure at least one level is active ----
+    if mask.sum() == 0:
+        mask[-1] = 1.0  # force leaf on
+
+    # ---- Apply mask + optional inverted scaling ----
+    masked_heads = []
+    for h, m, p_keep in zip(heads, mask, keep_probs):
+        if inverted_scaling:
+            scale = m / p_keep
+        else:
+            scale = m
+        masked_heads.append(h * scale)
+
+    return masked_heads, mask
 
 class HIFD2(nn.Module):
     """
@@ -265,64 +333,30 @@ class HIFD2(nn.Module):
         x_pf1_fc = self.fc_pf1(x_pf1_fc)
         x_leaf_class_fc = self.fc_leaf_class(x_leaf_class_fc)
 
-        # masked aggregation
-        if masks_dict is not None:
-            B = x_pf4_fc.size(0)
-            dev = x_pf4_fc.device
+        # Conditional hierarchical dropout
+        heads = [
+            x_pf4_fc,
+            x_pf3_fc,
+            x_pf2_fc,
+            x_pf1_fc,
+            x_leaf_class_fc,
+        ]
 
-            def m(name):
-                mask = masks_dict.get(name, None)
-                if mask is None:
-                    return torch.zeros(B, 1, dtype=torch.float32, device=dev)
-                return mask.to(dev).float().unsqueeze(1)
+        keep_probs = [0.7, 0.75, 0.8, 0.85, 0.92]  # coarse → fine
 
-            m_pf4 = m('pf4');
-            m_pf3 = m('pf3');
-            m_pf2 = m('pf2');
-            m_pf1 = m('pf1');
-            m_leaf = m('leaf')
+        (
+            x_pf4_fc,
+            x_pf3_fc,
+            x_pf2_fc,
+            x_pf1_fc,
+            x_leaf_class_fc,
+        ), _ = hierarchical_conditional_dropout(
+            heads=heads,
+            keep_probs=keep_probs,
+            training=self.training,
+            inverted_scaling=True,
+        )
 
-            x_pf4_m = x_pf4_fc * m_pf4
-            x_pf3_m = x_pf3_fc * m_pf3
-            x_pf2_m = x_pf2_fc * m_pf2
-            x_pf1_m = x_pf1_fc * m_pf1
-            x_leaf_m = x_leaf_class_fc * m_leaf
-
-            aggregated_features = self.gelu(
-                x_pf4_m + x_pf3_m + x_pf2_m + x_pf1_m + x_leaf_m
-            )
-        else:
-            aggregated_features = self.gelu(
-                x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc + x_leaf_class_fc
-            )
-
-        # # **Share aggregated features back to intermediate levels**
-        # # This allows gradients from leaf to flow back through all levels
-        # y_pf4 = self.classifier_pf4(
-        #     self.relu(x_pf4_fc + config.BIDIRECTIONAL_FEATURE_WEIGHTS['pf4'] * aggregated_features))
-        #
-        # y_pf3 = self.classifier_pf3(self.relu(
-        #     x_pf4_fc + x_pf3_fc + config.BIDIRECTIONAL_FEATURE_WEIGHTS['pf3'] * aggregated_features
-        # ))
-        #
-        # y_pf2 = self.classifier_pf2(self.relu(
-        #     x_pf4_fc + x_pf3_fc + x_pf2_fc + config.BIDIRECTIONAL_FEATURE_WEIGHTS['pf2'] * aggregated_features
-        #     # Stronger connection
-        # ))
-        #
-        # y_pf1 = self.classifier_pf1(self.relu(
-        #     x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc + config.BIDIRECTIONAL_FEATURE_WEIGHTS[
-        #         'pf1'] * aggregated_features  # Stronger connection
-        # ))
-        #
-        # y_leaf = self.classifier_leaf(self.relu(
-        #     x_pf4_fc + x_pf3_fc + x_pf2_fc + x_pf1_fc + x_leaf_class_fc
-        # ))
-        #
-        # # Return raw logits - apply sigmoid/softmax in loss functions
-        # return y_pf4, y_pf3, y_pf2, y_pf1, y_leaf
-
-        # **Share aggregated features back to intermediate levels**
         # This allows gradients from leaf to flow back through all levels
         y_pf4 = self.classifier_pf4(self.relu(x_pf4_fc))
 

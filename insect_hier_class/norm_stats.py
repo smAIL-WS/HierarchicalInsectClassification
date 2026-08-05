@@ -19,7 +19,7 @@ from insect_dataset_loader import InsectDataset
 # -----------------------------
 # Configuration (edit to match your setup)
 # -----------------------------
-TRAIN_LIST = "/sf_storage/Workspace/Zaki/HRN/insect_hier_class/runs/2025-12-12/insect_train_list.txt"  # path to your text train list: <image_path> <label> <class_name>
+TRAIN_LIST = "/path/to/train/list" # path to your text train list: <image_path> <label> <class_name>
 IMAGE_SIZE = 128                         # square target size for letterbox+reflect
 BATCH_SIZE = 4096
 NUM_WORKERS = 16

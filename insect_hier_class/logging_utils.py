@@ -15,7 +15,7 @@ import config
 
 
 def log_per_class_metrics(epoch, level_metrics_dict, label_maps, split, run_folder, 
-                          csv_filename=None, sentinel=-1):
+                          csv_filename=None, sentinel=-1, level_confidences=None, related_info=None):
     """
     Log per-class metrics to CSV file.
     
@@ -27,6 +27,8 @@ def log_per_class_metrics(epoch, level_metrics_dict, label_maps, split, run_fold
         run_folder: Path to run folder
         csv_filename: CSV filename (uses default from config if None)
         sentinel: Sentinel value for invalid labels
+        level_confidences: Optional dict mapping level names to arrays of confidences
+        related_info: Optional dict mapping level names to lists of (true_id, was_related) tuples
     """
     if csv_filename is None:
         csv_filename = config.PER_CLASS_METRICS_CSV
@@ -41,34 +43,79 @@ def log_per_class_metrics(epoch, level_metrics_dict, label_maps, split, run_fold
         if not file_exists:
             writer.writerow([
                 "Epoch", "Split", "Level", "Class ID", "Class Name", 
-                "Precision", "Recall", "F1 Score"
+                "Precision", "Recall", "F1 Score", "Avg Confidence", "Related Err %"
             ])
-        
+
         # Iterate over each level
         for level_name, (y_true, y_pred) in level_metrics_dict.items():
-            # Filter invalid entries
-            y_true = np.array(y_true)
-            y_pred = np.array(y_pred)
-            valid_mask = y_true != sentinel
-            y_true = y_true[valid_mask]
-            y_pred = y_pred[valid_mask]
-            
-            if len(y_true) == 0:
+            # 1. Convert to arrays
+            y_true_arr = np.array(y_true)
+            y_pred_arr = np.array(y_pred)
+
+            # 2. Derive valid mask (sentinel check)
+            valid_mask = y_true_arr != sentinel
+
+            # 3. Final metrics data
+            y_t_final = y_true_arr[valid_mask]
+            y_p_final = y_pred_arr[valid_mask]
+
+            if len(y_t_final) == 0:
                 continue
-            
-            # Compute metrics
-            precision = precision_score(y_true, y_pred, average=None, zero_division=0)
-            recall = recall_score(y_true, y_pred, average=None, zero_division=0)
-            f1 = f1_score(y_true, y_pred, average=None, zero_division=0)
-            unique_classes = sorted(set(y_true))
-            
+
+            # 4. Filter and Align Confidences
+            # Dictionary-based alignment: Class ID -> List of confidences
+            class_conf_map = {}
+            if level_confidences and level_name in level_confidences:
+                confs = np.array(level_confidences[level_name])
+
+                # If lengths match exactly (pre-filtered by compute_hierarchical_accuracy_with_inference)
+                if len(confs) == len(y_t_final):
+                    for tid, c_val in zip(y_t_final, confs):
+                        if tid not in class_conf_map: class_conf_map[tid] = []
+                        class_conf_map[tid].append(c_val)
+                # Fallback for legacy behavior (raw batch mask)
+                elif len(confs) == len(valid_mask):
+                    filtered_confs = confs[valid_mask]
+                    for tid, c_val in zip(y_t_final, filtered_confs):
+                        if tid not in class_conf_map: class_conf_map[tid] = []
+                        class_conf_map[tid].append(c_val)
+
+            # 5. Compute metrics using the aligned data
+            precision = precision_score(y_t_final, y_p_final, average=None, zero_division=0)
+            recall = recall_score(y_t_final, y_p_final, average=None, zero_division=0)
+            f1 = f1_score(y_t_final, y_p_final, average=None, zero_division=0)
+            unique_classes = sorted(set(y_t_final))
+
             # Get label map for current level
             label_map = label_maps.get(level_name, {})
+
+            # Extract related error info from level_metrics_dict context or counters
+            related_map = {}
+            rel_source = related_info.get(level_name) or related_info.get(level_name.upper()) or related_info.get(level_name.lower())
+            if rel_source:
+                for tid, was_rel in rel_source:
+                    if tid not in related_map:
+                        related_map[tid] = []
+                    related_map[tid].append(was_rel)
             
             # Write per-class metrics
             for i, cls in enumerate(unique_classes):
                 if i < len(precision):
                     class_name = label_map.get(str(cls), f"Class {cls}")
+
+                    # Calculate average confidence for this class
+                    avg_conf = 0.0
+                    if cls in class_conf_map:
+                        avg_conf = np.mean(class_conf_map[cls])
+
+                    # Calculate related error % for this class
+                    rel_pct = 0.0
+                    if cls in related_map:
+                        rel_pct = np.mean(related_map[cls])
+                    elif precision[i] >= 1.0 and recall[i] >= 1.0:
+                        # If accuracy is 100% for this class, related accuracy is technically 1.0
+                        rel_pct = 1.0
+
                     writer.writerow([
                         epoch,
                         split,
@@ -77,7 +124,9 @@ def log_per_class_metrics(epoch, level_metrics_dict, label_maps, split, run_fold
                         class_name,
                         round(precision[i], 4),
                         round(recall[i], 4),
-                        round(f1[i], 4)
+                        round(f1[i], 4),
+                        round(float(avg_conf), 4),
+                        round(float(rel_pct), 4)
                     ])
 
 
@@ -239,7 +288,8 @@ def log_per_level_metrics(
     split,
     run_folder,
     csv_filename=None,
-    sentinel=-1
+    sentinel=-1,
+    related_info=None
 ):
     """
     Log per-level aggregate metrics (Accuracy, Precision, Recall, F1, MCC) for a single split (Train or Test).
@@ -252,6 +302,7 @@ def log_per_level_metrics(
         run_folder (Path): Path to run folder
         csv_filename (str): Optional override for CSV filename (uses default from config if None)
         sentinel (int): Value used for invalid labels
+        related_info (dict): Optional mapping of level names to related error info (true_id, was_related)
     """
     # Use default from config if no filename provided
     if csv_filename is None:
@@ -261,7 +312,7 @@ def log_per_level_metrics(
     file_exists = csv_path.exists()
 
     levels = ["PF4", "PF3", "PF2", "PF1", "Leaf"]
-    metrics = ["Accuracy", "Precision", "Recall", "F1", "MCC"]
+    metrics = ["Accuracy", "Precision", "Recall", "F1", "MCC", "RelatedAccuracy"]
 
     header = ["Epoch", "Split", "Metric"] + levels
 
@@ -285,6 +336,13 @@ def log_per_level_metrics(
         results["Recall"].append(recall_score(y_true, y_pred, average="macro", zero_division=0))
         results["F1"].append(f1_score(y_true, y_pred, average="macro", zero_division=0))
         results["MCC"].append(matthews_corrcoef(y_true, y_pred))
+        # Compute Global Relatedness for this level
+        rel_acc = np.nan
+        if related_info and lvl in related_info and len(related_info[lvl]) > 0:
+            # Extract only the booleans from the (id, bool) tuples
+            rel_bools = [item[1] for item in related_info[lvl]]
+            rel_acc = np.mean(rel_bools)
+        results["RelatedAccuracy"].append(rel_acc)
 
     # Write to CSV
     with open(csv_path, mode="a", newline="", encoding="utf-8") as file:
