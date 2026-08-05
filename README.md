@@ -18,7 +18,7 @@ https://github.com/smAIL-WS/HierarchicalInsectClassification
 
 Dataset, trained model weights, metadata, hierarchy files, train/validation/test splits, evaluation outputs, and reproducibility artefacts are available via Zenodo:
 
-<ZENODO DOI OR URL>
+<https://doi.org/10.5281/zenodo.21765014>
 
 ---
 
@@ -923,4 +923,4 @@ If you use this repository, please cite:
 
 1. The associated publication.
 2. The GitHub repository: https://github.com/smAIL-WS/HierarchicalInsectClassification
-3. The Zenodo archive DOI.
+3. The Zenodo archive DOI: https://doi.org/10.5281/zenodo.21765014
