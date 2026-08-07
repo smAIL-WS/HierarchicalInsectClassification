@@ -9,14 +9,31 @@ Source code for dataset preprocessing, model training, and evaluation for hierar
 
 ## Setup
 
-1. Create and activate a Python virtual environment (developed and tested on Python 3.13.2).
-2. Install dependencies:
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/smAIL-WS/HierarchicalInsectClassification.git
+   cd HierarchicalInsectClassification
+   ```
+
+2. Create and activate a Python virtual environment (developed and tested on Python 3.13.2):
+
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+3. Install dependencies:
 
    ```bash
    pip install -r requirements.txt
    ```
 
-   For exact reproduction of the published environment, install the package versions listed in `environment.txt` instead.
+   For exact reproduction of the published environment, install the package versions listed in `environment.txt` instead:
+
+   ```bash
+   pip install -r environment.txt
+   ```
 
 ## Reproducing the Published Results
 
@@ -48,16 +65,10 @@ This is the recommended route to reproduce the paper's results directly, without
    insect_hier_class/models_Insect/
    ```
 
-5. In `insect_hier_class/analysis_metrics.py`, set the checkpoint path:
-
-   ```python
-   WEIGHTS_PATH = Path(...)  # path to the downloaded checkpoint
-   ```
-
-6. Run evaluation:
+5. Run evaluation, pointing `--weights_path` at the downloaded checkpoint:
 
    ```bash
-   python insect_hier_class/analysis_metrics.py
+   python insect_hier_class/analysis_metrics.py --weights_path insect_hier_class/models_Insect/model_Insect_100_96_bz1024_resnet18_OneCycle_2026-01-19_01-09.pth
    ```
 
 This performs the complete evaluation procedure reported in the paper (hierarchical MAP inference, confidence-thresholded backoff, coverage analysis, per-level and per-class metrics, confusion matrices) and writes the results described below.
@@ -70,7 +81,7 @@ If you want to train rather than use the provided checkpoint:
 python main.py --backbone resnet18 --use_pretrained
 ```
 
-The paper's final model was trained with this backbone for 100 epochs; see `insect_hier_class/config.py` for the full training configuration. Once training completes, point `WEIGHTS_PATH` in `analysis_metrics.py` to the resulting `.pth` checkpoint and run the evaluation step above.
+The paper's final model was trained with this backbone for 100 epochs; see `insect_hier_class/config.py` for the full training configuration. Once training completes, pass the resulting `.pth` checkpoint to `analysis_metrics.py` via `--weights_path` as shown in the evaluation step above.
 
 ## Evaluation Outputs
 
@@ -84,13 +95,3 @@ confusion_extended.xlsx
 confusion_matrices.pdf
 confusion_matrices_extended.pdf
 ```
-
-These constitute the final experimental results reported in the paper.
-
-## Citation
-
-If you use this repository, please cite:
-
-1. The associated publication.
-2. This repository: https://github.com/smAIL-WS/HierarchicalInsectClassification
-3. The Zenodo archive: https://doi.org/10.5281/zenodo.21765014
