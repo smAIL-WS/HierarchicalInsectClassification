@@ -27,12 +27,39 @@ from tree_loss import TreeLoss
 # ================= USER CONFIGURATION =======================
 # ============================================================
 
-CONF_THRESHOLD = 0.6
-BATCH_SIZE = 1024
-DEVICE_ID = "0"
-
 SCRIPT_DIR = Path(__file__).resolve().parent
-WEIGHTS_PATH = SCRIPT_DIR / "models_Insect" / "model_Insect_100_96_bz1024_resnet18_OneCycle_2026-01-19_01-09.pth"
+
+parser = argparse.ArgumentParser(description="Evaluate a trained hierarchical insect classification model.")
+parser.add_argument(
+    "--weights_path",
+    type=Path,
+    default=SCRIPT_DIR / "models_Insect" / "model_Insect_100_96_bz1024_resnet18_OneCycle_2026-01-19_01-09.pth",
+    help="Path to the trained model checkpoint (.pth).",
+)
+parser.add_argument(
+    "--conf_threshold",
+    type=float,
+    default=0.6,
+    help="Confidence threshold for hierarchical backoff (higher = fewer, more confident predictions).",
+)
+parser.add_argument(
+    "--batch_size",
+    type=int,
+    default=1024,
+    help="Evaluation batch size.",
+)
+parser.add_argument(
+    "--device_id",
+    type=str,
+    default="0",
+    help="CUDA device id to use (ignored if CUDA is unavailable).",
+)
+args = parser.parse_args()
+
+WEIGHTS_PATH = args.weights_path
+CONF_THRESHOLD = args.conf_threshold
+BATCH_SIZE = args.batch_size
+DEVICE_ID = args.device_id
 
 
 # ============================================================
