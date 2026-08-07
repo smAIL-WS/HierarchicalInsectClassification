@@ -1,8 +1,6 @@
-# Hierarchical Insect Classification
+# The code for Deep learning-based hierarchical insect classification using camera trap imagery
 
-A hierarchical deep learning framework for insect classification using a multi-level taxonomic hierarchy.
-
-This repository contains the source code used for dataset preparation, model training, hyperparameter optimisation, and evaluation. Data artefacts, trained model weights, and metadata required to reproduce the experiments are available separately through Zenodo.
+This repository contains the source code used for dataset preprocessing, model training, hyperparameter optimisation, and evaluation. Data artefacts, trained model weights, and metadata required to reproduce the experiments are available separately through Zenodo.
 
 ## Associated Resources
 
@@ -59,7 +57,7 @@ The DuckDB database is required by `split_train_test.py` when generating the tra
 ---
 # Project Structure
 
-The repository is expected to be organised as follows. Downloaded Zenodo run folders should be placed in `insect_hier_class/runs/`, and downloaded model checkpoints should be placed in `insect_hier_class/models_Insect/`.
+The repository is organised as follows. Downloaded Zenodo run folders should be placed in `insect_hier_class/runs/`, and downloaded model checkpoints should be placed in `insect_hier_class/models_Insect/`.
 
 ```text
 IHC/
