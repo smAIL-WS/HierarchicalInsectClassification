@@ -26,7 +26,7 @@ PRETRAINED_DIR = BASE_DIR.parent / 'pre-trained'
 # ============================================================================
 # Root directory containing the insect image dataset.
 # Train/test list files contain paths relative to this directory.
-DATASET_ROOT = DATA_DIR / 'IHC_dataset'
+DATASET_ROOT = DATA_DIR / 'IHC_dataset' / 'Crops_clean'
 
 # ============================================================================
 # DATA SOURCES
