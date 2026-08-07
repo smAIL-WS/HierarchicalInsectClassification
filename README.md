@@ -6,7 +6,7 @@ This repository contains the source code used for dataset preprocessing, model t
 
 ### Publication
 
-Mahfoud et al., *Deep learning-based hierarchical insect classification using camera trap imagery* (submitted for publication, 2026)
+Mahfoud et al., *Deep learning-based hierarchical insect classification using camera trap imagery* (submitted for publication, 2026). Pre-print is available at https://arxiv.org/abs/2607.28005. 
 
 ### GitHub Repository
 
