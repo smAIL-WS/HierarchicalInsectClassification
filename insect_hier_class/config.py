@@ -14,8 +14,11 @@ from pathlib import Path
 # PROJECT STRUCTURE
 # ============================================================================
 BASE_DIR = Path(__file__).resolve().parent
-RUNS_DIR = BASE_DIR / 'runs'
-MODELS_DIR = BASE_DIR / 'models_Insect'
+# Downloaded Zenodo artefacts (dataset, DuckDB, run folders, checkpoints) are
+# expected to live under a single `data/` folder at the repository root.
+DATA_DIR = BASE_DIR.parent / 'data'
+RUNS_DIR = DATA_DIR
+MODELS_DIR = DATA_DIR
 PRETRAINED_DIR = BASE_DIR.parent / 'pre-trained'
 
 # ============================================================================
@@ -23,12 +26,12 @@ PRETRAINED_DIR = BASE_DIR.parent / 'pre-trained'
 # ============================================================================
 # Root directory containing the insect image dataset.
 # Train/test list files contain paths relative to this directory.
-DATASET_ROOT = Path("/path/to/dataset/root")
+DATASET_ROOT = DATA_DIR / 'IHC_dataset'
 
 # ============================================================================
 # DATA SOURCES
 # ============================================================================
-DUCKDB_PATH = "/path/to/DuckDB/database"
+DUCKDB_PATH = DATA_DIR / 'insect_images_public.duckdb'
 
 # ============================================================================
 # RUN CONFIGURATION (Main setting to change between runs)

@@ -11,6 +11,7 @@ venv/
 # Data and Runs
 insect_hier_class/runs/
 runs/
+data/
 
 !README.md
 !requirements.txt

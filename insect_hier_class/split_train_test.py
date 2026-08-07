@@ -8,7 +8,6 @@ import json
 import sys
 import math
 from collections import defaultdict, Counter
-from pathlib import Path
 
 import config
 
@@ -21,9 +20,8 @@ db_path = str(config.DUCKDB_PATH)
 # db_path = '/Projects/FAIR_Device_data/Zaki/preprocess/insect_images_final.duckdb'
 table_name = 'cropped_images_optim'
 
-base_dir = Path(__file__).resolve().parent
-runs_dir = base_dir / 'runs'
-runs_dir.mkdir(exist_ok=True)
+runs_dir = config.RUNS_DIR
+runs_dir.mkdir(exist_ok=True, parents=True)
 date_str = datetime.date.today().isoformat()
 run_folder = runs_dir / date_str
 run_folder.mkdir(exist_ok=True)

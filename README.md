@@ -41,37 +41,25 @@ Source code for dataset preprocessing, model training, and evaluation for hierar
 
 This is the recommended route to reproduce the paper's results directly, without re-splitting data or re-running hyperparameter optimisation.
 
-1. Download from Zenodo:
-   - The insect image dataset
-   - The DuckDB metadata database (`insect_images_public.duckdb`)
-   - The published split/hierarchy files (`2026-01-19_portable`)
-   - The trained model checkpoint
-
-2. In `insect_hier_class/config.py`, set:
-
-   ```python
-   DATASET_ROOT = Path("/path/to/IHC_dataset")
-   DUCKDB_PATH = Path("/path/to/insect_images_public.duckdb")
-   RUN_DATE = "2026-01-19_portable"
-   ```
-
-3. Place the downloaded split/hierarchy files in:
+1. Download from Zenodo and extract everything into a single `data/` folder at the repository root, so it looks like this:
 
    ```
-   insect_hier_class/runs/2026-01-19_portable/
+   data/
+   ├── IHC_dataset/                                                    # the insect image dataset
+   ├── insect_images_public.duckdb                                     # the DuckDB metadata database
+   ├── 2026-01-19_portable/                                            # the published split/hierarchy files
+   └── model_Insect_100_96_bz1024_resnet18_OneCycle_2026-01-19_01-09.pth  # the trained model checkpoint
    ```
 
-4. Place the downloaded model checkpoint in:
+   `insect_hier_class/config.py` points `DATASET_ROOT`, `DUCKDB_PATH`, and `RUN_DATE`/`RUN_FOLDER` at this `data/` folder by default. If you extract the downloaded files to a different location, update these variables in `config.py` accordingly.
 
-   ```
-   insect_hier_class/models_Insect/
-   ```
-
-5. Run evaluation, pointing `--weights_path` at the downloaded checkpoint:
+2. Run evaluation:
 
    ```bash
-   python insect_hier_class/analysis_metrics.py --weights_path insect_hier_class/models_Insect/model_Insect_100_96_bz1024_resnet18_OneCycle_2026-01-19_01-09.pth
+   python insect_hier_class/analysis_metrics.py
    ```
+
+   This defaults `--weights_path` to `data/model_Insect_100_96_bz1024_resnet18_OneCycle_2026-01-19_01-09.pth`; pass `--weights_path` explicitly to point at a different checkpoint.
 
 This performs the complete evaluation procedure reported in the paper (hierarchical MAP inference, confidence-thresholded backoff, coverage analysis, per-level and per-class metrics, confusion matrices) and writes the results described below.
 

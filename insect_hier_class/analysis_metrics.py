@@ -33,7 +33,7 @@ parser = argparse.ArgumentParser(description="Evaluate a trained hierarchical in
 parser.add_argument(
     "--weights_path",
     type=Path,
-    default=SCRIPT_DIR / "models_Insect" / "model_Insect_100_96_bz1024_resnet18_OneCycle_2026-01-19_01-09.pth",
+    default=config.MODELS_DIR / "model_Insect_100_96_bz1024_resnet18_OneCycle_2026-01-19_01-09.pth",
     help="Path to the trained model checkpoint (.pth).",
 )
 parser.add_argument(
