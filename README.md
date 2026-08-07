@@ -35,6 +35,8 @@ Source code for dataset preprocessing, model training, and evaluation for hierar
    pip install -r environment.txt
    ```
 
+   `environment.txt` pins CUDA 12.8 builds of PyTorch (e.g. `torch==2.9.1+cu128`), which are only published for 64-bit Linux and require a Linux/x86_64 machine with an NVIDIA GPU (driver supporting CUDA 12.8 or newer). The download is several GB, so make sure you have at least 10 GB of free disk space before installing.
+
 ## Reproducing the Published Results
 
 This is the recommended route to reproduce the paper's results directly, without re-splitting data or re-running hyperparameter optimisation.
@@ -78,7 +80,7 @@ This performs the complete evaluation procedure reported in the paper (hierarchi
 If you want to train rather than use the provided checkpoint:
 
 ```bash
-python main.py --backbone resnet18 --use_pretrained
+python insect_hier_class/main.py --backbone resnet18 --use_pretrained
 ```
 
 The paper's final model was trained with this backbone for 100 epochs; see `insect_hier_class/config.py` for the full training configuration. Once training completes, pass the resulting `.pth` checkpoint to `analysis_metrics.py` via `--weights_path` as shown in the evaluation step above.
