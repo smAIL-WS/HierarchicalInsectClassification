@@ -19,7 +19,7 @@ Source code for dataset preprocessing, model training, and evaluation for hierar
 2. Create and activate a Python virtual environment (developed and tested on Python 3.13.2):
 
    ```bash
-   python3 -m venv venv
+   python3.13 -m venv venv
    source venv/bin/activate
    ```
 
