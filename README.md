@@ -80,7 +80,7 @@ python insect_hier_class/main.py --backbone resnet18 --use_pretrained
 The paper's final model was trained with this backbone for 100 epochs; see `insect_hier_class/config.py` for the full training configuration. Training saves checkpoints into `data/` as `model_<dataset>_<epochs>_<img_size>_bz<batch>_<backbone>_<lr_adjt>_<timestamp>.pth`. Once training completes, pass the resulting `.pth` checkpoint to `analysis_metrics.py` via `--weights_path`:
 
 ```bash
-python insect_hier_class/analysis_metrics.py --weights_path path/to/the/.pth
+python insect_hier_class/analysis_metrics.py --weights_path data/model_<dataset>_<epochs>_<img_size>_bz<batch>_<backbone>_<lr_adjt>_<timestamp>.pth
 ```
 
 The results will be saved to `/analysis_paper`:
