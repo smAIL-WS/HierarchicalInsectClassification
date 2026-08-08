@@ -14,6 +14,33 @@ import random
 
 from transforms_utils import build_train_transform
 
+
+def load_image_cv2(path):
+    """Decode an image from disk with OpenCV, converted to RGB."""
+    try:
+        img = cv2.imread(path)
+        if img is not None:
+            return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        else:
+            print(f"Warning: Image {path} could not be loaded.")
+            return None
+    except Exception as e:
+        print(f"Error loading image {path}: {e}")
+        return None
+
+
+def safe_collate(batch):
+    """
+    Collate function for InsectDataset batches of (image, target, index, class_name).
+    Filters out samples where the dataset returned None (failed image load) before
+    handing the remainder to the default collate.
+    """
+    batch = [sample for sample in batch if sample[0] is not None]
+    if len(batch) == 0:
+        return None
+    return data.default_collate(batch)
+
+
 class DynamicTransform:
     def __init__(self, schedule, aug_config, epoch_tracker):
         self.schedule = schedule
@@ -58,7 +85,7 @@ class InsectDataset(data.Dataset):
     Loads image paths and leaf-level labels from one or more text files.
     """
 
-    def __init__(self, list_path, input_transform=None, preload_images=True, use_threads=False, num_workers=12):
+    def __init__(self, list_path, input_transform=None, preload_images=False, use_threads=False, num_workers=12):
         """
         Args:
             list_path: Either a string(single list file) or a list of strings
@@ -108,18 +135,6 @@ class InsectDataset(data.Dataset):
 
         print(f"Loaded {len(self.image_filenames)} images with leaf-level labels.")
 
-        def load_image_cv2(path):
-            try:
-                img = cv2.imread(path)
-                if img is not None:
-                    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                else:
-                    print(f"Warning: Image {path} could not be loaded.")
-                    return None
-            except Exception as e:
-                print(f"Error loading image {path}: {e}")
-                return None
-
         if preload_images:
             print(f"Preloading {len(self.image_filenames)} images into RAM using OpenCV...")
             cv2.setNumThreads(0)
@@ -152,11 +167,10 @@ class InsectDataset(data.Dataset):
             input_image = Image.fromarray(input_image.copy())
         else:
             imagename = self.image_filenames[index]
-            try:
-                input_image = Image.open(imagename).convert('RGB')
-            except Exception as e:
-                print(f"Error loading image {imagename}: {e}")
+            raw_image = load_image_cv2(imagename)
+            if raw_image is None:
                 return None, None, None, None
+            input_image = Image.fromarray(raw_image)
 
         if self.transform:
             input_image = self.transform(input_image)

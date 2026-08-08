@@ -44,7 +44,7 @@ from optuna.pruners import MedianPruner, PatientPruner
 import config
 from hierarchical_model import HIFD2, BackboneWrapper
 from tree_loss import TreeLoss
-from insect_dataset_loader import InsectDataset, DynamicTransform
+from insect_dataset_loader import InsectDataset, DynamicTransform, safe_collate
 from train_test import train, test
 from transforms_utils import build_train_transform, build_test_transform
 
@@ -298,7 +298,8 @@ def objective(trial: optuna.trial.Trial, args):
                 shuffle=True,
                 num_workers=args.worker,
                 pin_memory=True,
-                persistent_workers=True
+                persistent_workers=True,
+                collate_fn=safe_collate
             )
             testloader = torch.utils.data.DataLoader(
                 testset,
@@ -306,7 +307,8 @@ def objective(trial: optuna.trial.Trial, args):
                 shuffle=False,
                 num_workers=max(0, args.worker // 2),
                 pin_memory=True,
-                persistent_workers=True
+                persistent_workers=True,
+                collate_fn=safe_collate
             )
 
             # ---- backbone & model ----

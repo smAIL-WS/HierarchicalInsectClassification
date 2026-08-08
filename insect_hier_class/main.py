@@ -25,7 +25,7 @@ import config
 from hierarchical_model import HIFD2, BackboneWrapper
 from hierarchical_target_generation_utils import init_classifier_biases_from_counts
 from tree_loss import TreeLoss
-from insect_dataset_loader import InsectDataset, DynamicTransform
+from insect_dataset_loader import InsectDataset, DynamicTransform, safe_collate
 from train_test import train, test
 from transforms_utils import build_train_transform, build_test_transform
 
@@ -168,7 +168,15 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
 
     args = arg_parse()
-    
+
+    # Re-seed with the actual CLI value: train_test.py seeds at import time using
+    # config.DEFAULT_SEED, which does not reflect a user-supplied --seed override.
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+
     # Print configuration
     config.print_config()
     print(f"\nTraining Arguments:")
@@ -224,16 +232,18 @@ def main():
         pin_memory=True,
         prefetch_factor=4,
         worker_init_fn=lambda worker_id: worker_init_fn(worker_id, epoch_tracker),
+        collate_fn=safe_collate,
         drop_last = False
     )
     testloader = torch.utils.data.DataLoader(
-        testset, 
-        batch_size=args.batch, 
-        shuffle=False, 
+        testset,
+        batch_size=args.batch,
+        shuffle=False,
         num_workers=args.worker // 2,
         persistent_workers=True,
         pin_memory=True,
         prefetch_factor=4,
+        collate_fn=safe_collate,
         drop_last=False
     )
     
