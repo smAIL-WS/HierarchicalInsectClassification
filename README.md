@@ -41,7 +41,13 @@ Source code for dataset preprocessing, model training, and evaluation for hierar
 
 This is the recommended route to reproduce the paper's results directly, without re-splitting data or re-running hyperparameter optimisation.
 
-1. Download from Zenodo and extract everything into a single `data/` folder at the repository root, so it looks like this:
+1. Download and extract everything from Zenodo into a single `data/` folder at the repository root:
+
+   ```bash
+   ./download_data.sh
+   ```
+
+   This fetches the dataset, metadata database, splits, and trained checkpoint, and extracts the archives, so `data/` looks like this:
 
    ```
    data/
