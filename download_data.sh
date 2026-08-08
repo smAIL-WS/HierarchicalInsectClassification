@@ -33,15 +33,19 @@ download() {
 
 # Only removes the archive if this run downloaded it; a pre-existing archive
 # (e.g. kept intentionally as a backup) is never deleted.
+# check_path (relative to DATA_DIR) is used for the idempotency check; dest_dir
+# is where the archive is actually extracted (defaults to DATA_DIR itself).
 extract_and_cleanup() {
     local archive="$1"
-    local extracted_dir="$2"
-    if [[ -d "${DATA_DIR}/${extracted_dir}" ]]; then
-        echo "Skipping extraction, already exists: ${extracted_dir}/"
+    local check_path="$2"
+    local dest_dir="${3:-${DATA_DIR}}"
+    if [[ -d "${DATA_DIR}/${check_path}" ]]; then
+        echo "Skipping extraction, already exists: ${check_path}/"
         return
     fi
     echo "Extracting ${archive}..."
-    tar -xzf "${DATA_DIR}/${archive}" -C "${DATA_DIR}"
+    mkdir -p "${dest_dir}"
+    tar -xzf "${DATA_DIR}/${archive}" -C "${dest_dir}"
     if [[ "${FRESHLY_DOWNLOADED[${archive}]:-0}" == "1" ]]; then
         rm -f "${DATA_DIR}/${archive}"
     fi
@@ -54,9 +58,11 @@ extract_and_cleanup "2026-01-19_portable.tar.gz" "2026-01-19_portable"
 # Supplementary class list (reference only, not read by the code)
 download "ClassificationClasses_IHC.csv"
 
-# Insect image dataset (~4 GB compressed, ~7 GB extracted)
+# Insect image dataset (~4 GB compressed, ~7 GB extracted). The archive's
+# top-level folder is Crops_clean/, not IHC_dataset/, so it must be extracted
+# into an IHC_dataset/ subfolder to match config.py's DATASET_ROOT.
 download "IHC_dataset.tar.gz"
-extract_and_cleanup "IHC_dataset.tar.gz" "IHC_dataset"
+extract_and_cleanup "IHC_dataset.tar.gz" "IHC_dataset/Crops_clean" "${DATA_DIR}/IHC_dataset"
 
 # DuckDB metadata database (~40 MB)
 download "insect_images_public.duckdb"
