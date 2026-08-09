@@ -2,6 +2,8 @@
 
 Source code for dataset preprocessing, model training, and evaluation for hierarchical insect classification from camera trap imagery.
 
+This README covers the quick path: downloading the published artefacts and reproducing the paper's evaluation results. For the extended version, covering dataset splitting from scratch, hyperparameter optimisation, and the full training/evaluation workflow needed to reproduce everything in the paper end-to-end, see [README-2.md](README-2.md).
+
 ## Associated Resources
 
 - **Paper:** Mahfoud et al., *Deep learning-based hierarchical insect classification using camera trap imagery* (submitted for publication, 2026). Pre-print: https://arxiv.org/abs/2607.28005
